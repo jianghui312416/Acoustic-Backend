@@ -9,6 +9,7 @@ from typing import Any, Dict, Mapping, Sequence
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.middleware.gzip import GZipMiddleware
 import netCDF4
 import numpy as np
 
@@ -29,6 +30,9 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "X-Bellhop-Explicit-Submit"],
 )
+# 海流接口包含全部深度层，JSON 体积明显大于二维天气网格；传输前压缩，
+# 避免上游下载完成后又因浏览器接收大响应而超时。
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
 BASE = os.path.dirname(os.path.abspath(__file__)) # 当前文件的绝对路径
 PROJECT = os.path.dirname(BASE) # 项目根目录
@@ -3156,6 +3160,8 @@ from backworker.api_endpoints.get_weather_forecast import create_router as _crea
 from backworker.api_endpoints.get_regional_weather_forecast import create_router as _create_regional_weather_forecast_router
 from backworker.api_endpoints.get_realtime_ais import create_router as _create_realtime_ais_router
 from backworker.api_endpoints.analyse_forecast_environment_noise import create_router as _create_forecast_environment_noise_router
+from backworker.api_endpoints.analyse_regional_forecast_environment_noise import create_router as _create_regional_forecast_environment_noise_router
+from backworker.api_endpoints.get_regional_ocean_current import create_router as _create_regional_ocean_current_router
 
 @app.post("/", summary="当前前端统一门户接口")
 async def _unified_portal_endpoint(request: Request):
@@ -3167,6 +3173,8 @@ app.include_router(_create_weather_forecast_router())
 app.include_router(_create_regional_weather_forecast_router())
 app.include_router(_create_realtime_ais_router())
 app.include_router(_create_forecast_environment_noise_router())
+app.include_router(_create_regional_forecast_environment_noise_router())
+app.include_router(_create_regional_ocean_current_router())
 
 
 # =============================================================================
@@ -4455,6 +4463,8 @@ _FRONTEND_ROUTE_PATHS = {
     "/GetRegionalWeatherForecast",
     "/GetRealtimeAIS",
     "/AnalyseForecastEnvironmentNoise",
+    "/AnalyseRegionalForecastEnvironmentNoise",
+    "/GetRegionalOceanCurrent",
     "/jobs",
     "/jobs/{job_id}/visualization",
     "/jobs/{job_id}",

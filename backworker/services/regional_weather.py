@@ -4,14 +4,19 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+import math
 from typing import Any, Callable
 
 from . import open_meteo_weather
 
 
-GRID_ROWS = 3
-GRID_COLUMNS = 3
-MAX_FORECAST_LEAD_HOURS = open_meteo_weather.MAX_FORECAST_HOURS - 1
+# WeatherNext 2 与 DWD GWAM 当前都使用 0.25°原生经纬度网格。区域采样点
+# 对齐到该网格，不再人为固定行列数，避免大区域欠采样和小区域重复采样。
+NATIVE_GRID_DEGREES = 0.25
+# 前端预报时间轴为当前整点起48小时；一次缓存完整时间轴，滑杆变化只读取
+# 已有网格，不再为每个时次重复请求上游服务。
+REGIONAL_CACHE_FORECAST_HOURS = open_meteo_weather.FORECAST_HOURS
+MAX_FORECAST_LEAD_HOURS = REGIONAL_CACHE_FORECAST_HOURS - 1
 
 FIELD_MAP = {
     "wind_speed_mps": "wind10",
@@ -63,11 +68,14 @@ def parse_forecast_time(value: Any) -> datetime:
     return parsed
 
 
-def _axis(start: float, end: float, count: int) -> list[float]:
-    if count <= 1:
-        return [round((float(start) + float(end)) / 2.0, 6)]
-    step = (float(end) - float(start)) / (count - 1)
-    return [round(float(start) + index * step, 6) for index in range(count)]
+def _native_axis(start: float, end: float) -> list[float]:
+    """向外覆盖请求边界，并严格落在0.25°原生网格线上。"""
+    first = math.floor(float(start) / NATIVE_GRID_DEGREES + 1e-9)
+    last = math.ceil(float(end) / NATIVE_GRID_DEGREES - 1e-9)
+    return [
+        round(index * NATIVE_GRID_DEGREES, 6)
+        for index in range(first, last + 1)
+    ]
 
 
 def _value_at(hourly: dict[str, Any], name: str, index: int) -> float | None:
@@ -88,7 +96,7 @@ def fetch_region_forecast(
     now_utc: datetime | None = None,
     point_fetcher: Callable[..., dict[str, Any]] = open_meteo_weather.fetch_forecast,
 ) -> dict[str, Any]:
-    """获取固定 3×3 区域网格在指定整点的一小时预报。"""
+    """按天气模型0.25°原生网格获取指定整点的一小时区域预报。"""
     if isinstance(forecast_time, datetime):
         if forecast_time.tzinfo is None:
             raise ValueError("forecastTime 必须包含时区，例如 Z 或 +08:00。")
@@ -109,9 +117,9 @@ def fetch_region_forecast(
             f"forecastTime 必须位于 UTC 当前整点至未来 {MAX_FORECAST_LEAD_HOURS} 小时。"
         )
 
-    longitudes = _axis(west, east, GRID_COLUMNS)
+    longitudes = _native_axis(west, east)
     # 地图栅格按北到南排列，和图像行方向一致。
-    latitudes = _axis(north, south, GRID_ROWS)
+    latitudes = list(reversed(_native_axis(south, north)))
     jobs = [
         (row, column, longitude, latitude)
         for row, latitude in enumerate(latitudes)
@@ -119,21 +127,31 @@ def fetch_region_forecast(
     ]
     results: dict[tuple[int, int], dict[str, Any]] = {}
 
-    def fetch(job):
-        row, column, longitude, latitude = job
-        forecast = point_fetcher(
-            longitude,
-            latitude,
-            forecast_hours=lead_hours + 1,
+    if point_fetcher is open_meteo_weather.fetch_forecast:
+        forecasts = open_meteo_weather.fetch_forecasts(
+            [(longitude, latitude) for _, _, longitude, latitude in jobs],
+            forecast_hours=REGIONAL_CACHE_FORECAST_HOURS,
             now_utc=current_hour,
         )
-        return row, column, forecast
-
-    with ThreadPoolExecutor(max_workers=min(6, len(jobs))) as executor:
-        futures = [executor.submit(fetch, job) for job in jobs]
-        for future in as_completed(futures):
-            row, column, forecast = future.result()
+        for (row, column, _longitude, _latitude), forecast in zip(jobs, forecasts):
             results[(row, column)] = forecast
+    else:
+        # 保留可注入的单点获取器，供离线测试与替代数据源使用。
+        def fetch(job):
+            row, column, longitude, latitude = job
+            forecast = point_fetcher(
+                longitude,
+                latitude,
+                forecast_hours=REGIONAL_CACHE_FORECAST_HOURS,
+                now_utc=current_hour,
+            )
+            return row, column, forecast
+
+        with ThreadPoolExecutor(max_workers=min(6, len(jobs))) as executor:
+            futures = [executor.submit(fetch, job) for job in jobs]
+            for future in as_completed(futures):
+                row, column, forecast = future.result()
+                results[(row, column)] = forecast
 
     fields = {
         output_name: [[None for _ in longitudes] for _ in latitudes]
@@ -167,9 +185,16 @@ def fetch_region_forecast(
             "north": float(north),
         },
         "grid": {
-            "rows": GRID_ROWS,
-            "columns": GRID_COLUMNS,
+            "rows": len(latitudes),
+            "columns": len(longitudes),
             "row_order": "north_to_south",
+            "native_resolution_degrees": NATIVE_GRID_DEGREES,
+            "sampling_bounds": {
+                "west": longitudes[0],
+                "south": latitudes[-1],
+                "east": longitudes[-1],
+                "north": latitudes[0],
+            },
             "latitudes": latitudes,
             "longitudes": longitudes,
             "source_grid_latitudes": source_latitudes,

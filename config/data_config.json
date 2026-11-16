@@ -193,11 +193,7 @@
       "port": 5432,
       "dbname": "test_9_28",
       "user": "postgres",
-<<<<<<< HEAD
       "password": "jh312416",
-=======
-      "password": "",
->>>>>>> ddb42cb8a1f6a343fc01606de325a843fe48e00c
       "connect_timeout": 20,
       "table": "datasetFileCatalog",
       "default_time": "2025-01-02 12:00:00"

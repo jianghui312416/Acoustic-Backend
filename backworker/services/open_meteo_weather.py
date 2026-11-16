@@ -5,7 +5,9 @@ from __future__ import annotations
 import math
 import re
 import threading
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -18,19 +20,33 @@ from urllib3.util.retry import Retry
 ENSEMBLE_URL = "https://ensemble-api.open-meteo.com/v1/ensemble"
 MARINE_URL = "https://marine-api.open-meteo.com/v1/marine"
 WEATHERNEXT_MODEL = "google_weathernext2_ensemble"
+# 区域覆盖层只消费集合均值。直接使用官方预计算均值，避免为每个0.25°网格点
+# 下载全部集合成员；单点天气/噪声预报仍继续使用上面的完整集合模型。
+WEATHERNEXT_MEAN_MODEL = "google_weathernext2_ensemble_mean"
 MARINE_MODEL = "dwd_gwam"
 FORECAST_HOURS = 48
 MIN_FORECAST_HOURS = 1
 MAX_FORECAST_HOURS = 168
 
 _CACHE_GRID_DEG = 0.25
-_CACHE_LIMIT = 64
-_FORECAST_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+# 区域图层会连续读取同一片0.25°原生网格的多个预报时次。缓存必须能容纳
+# 完整区域，否则超过旧的225点规模后会边请求边清空，并在噪声接口中重复下载。
+_CACHE_LIMIT = 8192
+_BATCH_SIZE = 24
+_BATCH_WORKERS = 4
+_FORECAST_CACHE: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
 _FORECAST_CACHE_LOCK = threading.Lock()
+_BATCH_FETCH_LOCK = threading.Lock()
 
 WEATHER_VARIABLES = (
     "pressure_msl",
     "sea_surface_temperature",
+    "wind_speed_10m",
+    "wind_direction_10m",
+    "precipitation",
+)
+# 区域伪彩图和区域噪声只需要这三个天气量；其余字段不从公网下载。
+REGIONAL_WEATHER_VARIABLES = (
     "wind_speed_10m",
     "wind_direction_10m",
     "precipitation",
@@ -109,6 +125,86 @@ def _get_json(session: Any, url: str, params: Mapping[str, Any]) -> Mapping[str,
             f"Open-Meteo 拒绝请求：{payload.get('reason') or '未知原因'}"
         )
     return payload
+
+
+def _get_json_many(
+    session: Any, url: str, params: Mapping[str, Any], expected: int
+) -> list[Mapping[str, Any]]:
+    """请求多个坐标；Open-Meteo 对多坐标返回对象数组。"""
+    try:
+        response = session.get(url, params=dict(params), timeout=(5, 60))
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as exc:
+        raise OpenMeteoError(f"Open-Meteo 批量请求失败：{exc}") from exc
+    except ValueError as exc:
+        raise OpenMeteoError("Open-Meteo 批量请求返回了无法解析的 JSON。") from exc
+    values = [payload] if isinstance(payload, Mapping) else payload
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+        raise OpenMeteoError("Open-Meteo 批量返回值不是 JSON 对象数组。")
+    results = list(values)
+    if len(results) != expected or not all(isinstance(item, Mapping) for item in results):
+        raise OpenMeteoError(
+            f"Open-Meteo 批量返回坐标数不匹配：请求 {expected}，返回 {len(results)}。"
+        )
+    for item in results:
+        if item.get("error"):
+            raise OpenMeteoError(
+                f"Open-Meteo 拒绝批量请求：{item.get('reason') or '未知原因'}"
+            )
+    return results
+
+
+class _MemoryResponse:
+    def __init__(self, payload: Mapping[str, Any]):
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> Mapping[str, Any]:
+        return self._payload
+
+
+class _PointPayloadSession:
+    """把批量响应中的一个坐标交给现有单点解析逻辑。"""
+
+    def __init__(self, weather: Mapping[str, Any], marine: Mapping[str, Any]):
+        self.weather = weather
+        self.marine = marine
+
+    def get(self, url: str, **_kwargs: Any) -> _MemoryResponse:
+        return _MemoryResponse(self.marine if url == MARINE_URL else self.weather)
+
+    def close(self) -> None:
+        return None
+
+
+def _cache_key(
+    longitude: float, latitude: float, forecast_hours: int, start_utc: datetime
+) -> tuple[Any, ...]:
+    return (
+        round(float(latitude) / _CACHE_GRID_DEG),
+        round(float(longitude) / _CACHE_GRID_DEG),
+        int(forecast_hours),
+        start_utc.isoformat(),
+    )
+
+
+def _get_cached(key: tuple[Any, ...]) -> dict[str, Any] | None:
+    with _FORECAST_CACHE_LOCK:
+        value = _FORECAST_CACHE.get(key)
+        if value is not None:
+            _FORECAST_CACHE.move_to_end(key)
+        return value
+
+
+def _put_cached(key: tuple[Any, ...], value: dict[str, Any]) -> None:
+    with _FORECAST_CACHE_LOCK:
+        _FORECAST_CACHE[key] = value
+        _FORECAST_CACHE.move_to_end(key)
+        while len(_FORECAST_CACHE) > _CACHE_LIMIT:
+            _FORECAST_CACHE.popitem(last=False)
 
 
 def _hourly(payload: Mapping[str, Any], source: str) -> Mapping[str, Any]:
@@ -407,14 +503,8 @@ def fetch_forecast(
 
     cache_key = None
     if session is None:
-        cache_key = (
-            round(float(latitude) / _CACHE_GRID_DEG),
-            round(float(longitude) / _CACHE_GRID_DEG),
-            forecast_hours,
-            start_utc.isoformat(),
-        )
-        with _FORECAST_CACHE_LOCK:
-            cached = _FORECAST_CACHE.get(cache_key)
+        cache_key = _cache_key(longitude, latitude, forecast_hours, start_utc)
+        cached = _get_cached(cache_key)
         if cached is not None:
             return cached
 
@@ -553,8 +643,127 @@ def fetch_forecast(
         "provider": "open-meteo/weathernext2-ensemble",
     }
     if cache_key is not None:
-        with _FORECAST_CACHE_LOCK:
-            if len(_FORECAST_CACHE) >= _CACHE_LIMIT:
-                _FORECAST_CACHE.clear()
-            _FORECAST_CACHE[cache_key] = result
+        _put_cached(cache_key, result)
     return result
+
+
+def fetch_forecasts(
+    points: Sequence[tuple[float, float]],
+    *,
+    forecast_hours: int = FORECAST_HOURS,
+    now_utc: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """批量获取多个原生网格点，并按输入顺序返回单点预报。
+
+    同一批区域天气与区域噪声请求通过缓存和批量锁复用结果，避免同时向
+    Open-Meteo 重复提交整片区域。
+    """
+    if not MIN_FORECAST_HOURS <= int(forecast_hours) <= MAX_FORECAST_HOURS:
+        raise ValueError(
+            f"forecast_hours 必须位于 {MIN_FORECAST_HOURS} 到 {MAX_FORECAST_HOURS}。"
+        )
+    forecast_hours = int(forecast_hours)
+    fetched_at = now_utc or datetime.now(timezone.utc)
+    if fetched_at.tzinfo is None:
+        fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+    fetched_at = fetched_at.astimezone(timezone.utc)
+    start_utc = _utc_hour_start(fetched_at)
+    normalized = [(float(lon), float(lat)) for lon, lat in points]
+    if not normalized:
+        return []
+
+    def collect_cached() -> tuple[list[dict[str, Any] | None], list[int]]:
+        values: list[dict[str, Any] | None] = []
+        missing: list[int] = []
+        for index, (longitude, latitude) in enumerate(normalized):
+            value = _get_cached(
+                _cache_key(longitude, latitude, forecast_hours, start_utc)
+            )
+            values.append(value)
+            if value is None:
+                missing.append(index)
+        return values, missing
+
+    results, missing_indices = collect_cached()
+    if not missing_indices:
+        return [value for value in results if value is not None]
+
+    # 防止天气覆盖层与噪声覆盖层首次并发打开时下载两遍相同区域。
+    with _BATCH_FETCH_LOCK:
+        results, missing_indices = collect_cached()
+        if not missing_indices:
+            return [value for value in results if value is not None]
+
+        chunks = [
+            missing_indices[offset : offset + _BATCH_SIZE]
+            for offset in range(0, len(missing_indices), _BATCH_SIZE)
+        ]
+
+        def fetch_chunk(indices: list[int]) -> list[tuple[int, dict[str, Any]]]:
+            chunk_points = [normalized[index] for index in indices]
+            client = _new_session()
+            try:
+                common = {
+                    "latitude": ",".join(str(lat) for _, lat in chunk_points),
+                    "longitude": ",".join(str(lon) for lon, _ in chunk_points),
+                    "forecast_hours": forecast_hours,
+                    "timezone": "GMT",
+                }
+                weather_items = _get_json_many(
+                    client,
+                    ENSEMBLE_URL,
+                    {
+                        **common,
+                        "hourly": ",".join(REGIONAL_WEATHER_VARIABLES),
+                        "models": WEATHERNEXT_MEAN_MODEL,
+                        "wind_speed_unit": "ms",
+                        "precipitation_unit": "mm",
+                        "cell_selection": "sea",
+                    },
+                    len(indices),
+                )
+                marine_items = _get_json_many(
+                    client,
+                    MARINE_URL,
+                    {
+                        **common,
+                        "hourly": ",".join(MARINE_VARIABLES),
+                        "models": MARINE_MODEL,
+                        "cell_selection": "sea",
+                    },
+                    len(indices),
+                )
+            finally:
+                client.close()
+
+            chunk_results: list[tuple[int, dict[str, Any]]] = []
+            for index, weather, marine in zip(indices, weather_items, marine_items):
+                longitude, latitude = normalized[index]
+                # 复用单点结果组装逻辑；区域未请求的温度/气压字段显式填空。
+                weather_hourly = weather.get("hourly")
+                if isinstance(weather_hourly, dict):
+                    count = len(weather_hourly.get("time") or [])
+                    weather_hourly.setdefault("pressure_msl", [None] * count)
+                    weather_hourly.setdefault("sea_surface_temperature", [None] * count)
+                value = fetch_forecast(
+                    longitude,
+                    latitude,
+                    forecast_hours=forecast_hours,
+                    session=_PointPayloadSession(weather, marine),
+                    now_utc=fetched_at,
+                )
+                _put_cached(
+                    _cache_key(longitude, latitude, forecast_hours, start_utc), value
+                )
+                chunk_results.append((index, value))
+            return chunk_results
+
+        with ThreadPoolExecutor(max_workers=min(_BATCH_WORKERS, len(chunks))) as executor:
+            futures = [executor.submit(fetch_chunk, chunk) for chunk in chunks]
+            for future in as_completed(futures):
+                for index, value in future.result():
+                    results[index] = value
+
+    if any(value is None for value in results):
+        raise OpenMeteoError("Open-Meteo 批量请求存在缺失网格点。")
+    return [value for value in results if value is not None]

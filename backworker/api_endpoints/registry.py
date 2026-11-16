@@ -49,4 +49,6 @@ PORTAL_PLUGIN_SN_MAP: dict[str, int] = {
     "GetRealtimeAIS": 147,
     "AnalyseForecastEnvironmentNoise": 148,
     "GetRegionalWeatherForecast": 149,
+    "AnalyseRegionalForecastEnvironmentNoise": 150,
+    "GetRegionalOceanCurrent": 151,
 }

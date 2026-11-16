@@ -19,12 +19,14 @@ from .analyse_3d_rt_rd_dynamic import handle as handle_analyse_3d_rt_dynamic
 from .analyse_3d_tl_rd import handle as handle_analyse_3d_tl
 from .analyse_env_noise import handle as handle_environment_noise
 from .analyse_forecast_environment_noise import handle as handle_forecast_environment_noise
+from .analyse_regional_forecast_environment_noise import handle as handle_regional_forecast_environment_noise
 from .get_dataset_list import handle as handle_dataset_list
 from .get_dataset_time_list import handle as handle_dataset_time_list
 from .get_env_data_region import handle as handle_env_data_region
 from .get_env_data_route import handle as handle_env_data_route
 from .get_realtime_ais import handle as handle_realtime_ais
 from .get_regional_weather_forecast import handle as handle_regional_weather_forecast
+from .get_regional_ocean_current import handle as handle_regional_ocean_current
 from .get_weather_forecast import handle as handle_weather_forecast
 from .ice_2d_rt import handle as handle_ice_2d_rt
 from .ice_2d_rt_dynamic import handle as handle_ice_2d_rt_dynamic
@@ -116,6 +118,8 @@ PORTAL_HANDLERS: dict[str, PortalHandler] = {
     "GetRealtimeAIS": handle_realtime_ais,
     "AnalyseForecastEnvironmentNoise": handle_forecast_environment_noise,
     "GetRegionalWeatherForecast": handle_regional_weather_forecast,
+    "AnalyseRegionalForecastEnvironmentNoise": handle_regional_forecast_environment_noise,
+    "GetRegionalOceanCurrent": handle_regional_ocean_current,
 }
 
 PORTAL_ENDPOINTS = {

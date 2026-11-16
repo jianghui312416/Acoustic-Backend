@@ -262,10 +262,12 @@ def _product_for_time(
 
 
 class HycomNcssReader:
-    """按所选时次从 HYCOM NCSS 下载局部温盐与海冰场。"""
+    """按所选时次从 HYCOM NCSS 下载局部温盐、海流与海冰场。"""
 
     temperature_tag = "water_temp"
     salinity_tag = "salinity"
+    current_u_tag = "water_u"
+    current_v_tag = "water_v"
     hs_tag = ""
     tp_tag = ""
     direction_tag = ""
@@ -317,6 +319,11 @@ class HycomNcssReader:
         return west, east, south, north, centre
 
     def _request_spec(self, tag: str) -> tuple[list[str], tuple[str, ...]]:
+        if tag in {self.current_u_tag, self.current_v_tag}:
+            if self._product != "latest":
+                raise HycomServiceError("HYCOM 海流覆盖层当前只支持实时分析与预报时段。")
+            urls = _service_urls(self._options, "latest_ncss_urls", "latest_ncss_url")
+            return urls, (self.current_u_tag, self.current_v_tag)
         if tag == self.ice_tag:
             if self._product == "latest":
                 urls = _service_urls(
@@ -413,7 +420,10 @@ class HycomNcssReader:
     def read_profile_cube(
         self, tag: str, query_lon: np.ndarray, query_lat: np.ndarray
     ) -> dict[str, Any]:
-        if tag not in {self.temperature_tag, self.salinity_tag, self.ice_tag}:
+        if tag not in {
+            self.temperature_tag, self.salinity_tag, self.current_u_tag,
+            self.current_v_tag, self.ice_tag,
+        }:
             raise HycomServiceError(f"HYCOM 读取器不支持变量 {tag!r}。")
         bounds = self._bounds(query_lon, query_lat)
         path = self._download(tag, bounds)

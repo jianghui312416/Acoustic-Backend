@@ -37,16 +37,17 @@ def _openapi_extra() -> dict[str, Any]:
         "forecast_time": "2026-10-30T10:00:00Z",
         "forecast_hours": 1,
         "grid": {
-            "rows": 3,
-            "columns": 3,
+            "rows": 4,
+            "columns": 4,
             "row_order": "north_to_south",
-            "latitudes": [22.7, 22.4, 22.1],
-            "longitudes": [113.75, 114.125, 114.5],
+            "native_resolution_degrees": 0.25,
+            "latitudes": [22.75, 22.5, 22.25, 22.0],
+            "longitudes": [113.75, 114.0, 114.25, 114.5],
         },
         "data": {
-            "wind_speed_mps": [[5.1, 5.3, 5.5], [5.0, 5.2, 5.4], [4.9, 5.1, 5.3]],
-            "rain_rate_mmh": [[0.0, 0.1, 0.2], [0.0, 0.1, 0.1], [0.0, 0.0, 0.1]],
-            "wave_height_m": [[1.1, 1.2, 1.3], [1.0, 1.1, 1.2], [0.9, 1.0, 1.1]],
+            "wind_speed_mps": [[5.1, 5.2, 5.3, 5.4], [5.0, 5.1, 5.2, 5.3], [4.9, 5.0, 5.1, 5.2], [4.8, 4.9, 5.0, 5.1]],
+            "rain_rate_mmh": [[0.0, 0.1, 0.1, 0.2], [0.0, 0.1, 0.1, 0.1], [0.0, 0.0, 0.1, 0.1], [0.0, 0.0, 0.0, 0.1]],
+            "wave_height_m": [[1.1, 1.2, 1.2, 1.3], [1.0, 1.1, 1.1, 1.2], [0.9, 1.0, 1.0, 1.1], [0.8, 0.9, 0.9, 1.0]],
         },
     }
     return {
@@ -57,7 +58,7 @@ def _openapi_extra() -> dict[str, Any]:
                 "wrapped": {"summary": "统一门户请求", "value": wrapped},
             },
         }}},
-        "responses": {"200": {"description": "指定整点的 3×3 区域天气与海况网格", "content": {
+        "responses": {"200": {"description": "指定整点、按0.25°原生分辨率对齐的区域天气与海况网格", "content": {
             "application/json": {"example": {**response, "ResultCode": 0}}
         }}},
     }
