@@ -1,0 +1,416 @@
+{
+  "_说明": "数据库、本地环境文件、任务目录、门户网格和公共默认参数。带下划线的说明字段仅供阅读。",
+  "CONFIG_VERSION": "2026.09.20-multi-model-v1",
+  "DATA_CATALOG": {
+    "mode": "file",
+    "default_time": "2025-01-02 12:00:00",
+    "_mode说明": "file=完全禁用 datasetFileCatalog 数据库查询；postgres=恢复 PostgreSQL 文件目录。"
+  },
+  "ACOUSTIC_ENVIRONMENT": {
+    "_距离采样说明": "距离采样点数由 Bellhop、Kraken、RAM 各自配置文件中的 N_2D_PROFILES 独立控制；PROFILE_EXTRA_KM 仅表示公共环境可用的额外覆盖距离。",
+    "PADDING_KM": 100.0,
+    "PROFILE_EXTRA_KM": 25.0,
+    "DEPTH_GUARD_M": 10.0,
+    "SSP_MODE": "range_dependent",
+    "BOTTOM": {
+      "COMPRESSIONAL_SPEED_MPS": 1600.0,
+      "SHEAR_SPEED_MPS": 0.0,
+      "DENSITY_G_CM3": 1.8,
+      "COMPRESSIONAL_ATTENUATION": 0.8,
+      "SHEAR_ATTENUATION": 0.0
+    },
+    "BOTTOM_GEOACOUSTICS": {
+      "ENABLED": true,
+      "REQUIRED_FIELDS": [
+        "compressional_speed_mps",
+        "density_g_cm3",
+        "compressional_attenuation"
+      ],
+      "NETCDF_VARIABLES": {
+        "compressional_speed_mps": ["cp_m_s_prior", "bottom_cp", "sediment_cp", "compressional_speed", "cp"],
+        "shear_speed_mps": ["cs_m_s_prior", "bottom_cs", "sediment_cs", "shear_speed", "cs"],
+        "density_g_cm3": ["bulk_density_kg_m3", "bottom_density", "sediment_density", "density", "rho"],
+        "compressional_attenuation": ["alpha_p_db_per_lambda_prior", "bottom_alpha_p", "sediment_alpha_p", "compressional_attenuation", "alpha_p"],
+        "shear_attenuation": ["alpha_s_db_per_lambda_prior", "bottom_alpha_s", "sediment_alpha_s", "shear_attenuation", "alpha_s"]
+      },
+      "SCALE": {
+        "compressional_speed_mps": 1.0,
+        "shear_speed_mps": 1.0,
+        "density_g_cm3": 0.001,
+        "compressional_attenuation": 1.0,
+        "shear_attenuation": 1.0
+      },
+      "OFFSET": {
+        "compressional_speed_mps": 0.0,
+        "shear_speed_mps": 0.0,
+        "density_g_cm3": 0.0,
+        "compressional_attenuation": 0.0,
+        "shear_attenuation": 0.0
+      },
+      "VALID_RANGES": {
+        "compressional_speed_mps": [1000.0, 6000.0],
+        "shear_speed_mps": [0.0, 4000.0],
+        "density_g_cm3": [0.5, 4.0],
+        "compressional_attenuation": [0.0, 100.0],
+        "shear_attenuation": [0.0, 100.0]
+      }
+    }
+  },
+  "DATA_SOURCES": {
+    "temperature": {
+      "mode": "file",
+      "file": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0000_t3z.nc",
+      "files": {
+        "2025-01-02 12:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0000_t3z.nc",
+        "2025-01-02 15:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0003_t3z.nc",
+        "2025-01-02 18:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0006_t3z.nc",
+        "2025-01-02 21:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0009_t3z.nc",
+        "2025-01-03 00:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0012_t3z.nc",
+        "2025-01-03 03:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0015_t3z.nc",
+        "2025-01-03 06:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0018_t3z.nc",
+        "2025-01-03 09:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0021_t3z.nc"
+      },
+      "hycom_variable": "water_temp",
+      "api0_tag": "water_temp",
+      "api1_data_type": "DT_ENV_TEMP"
+    },
+    "salinity": {
+      "mode": "file",
+      "file": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0000_s3z.nc",
+      "files": {
+        "2025-01-02 12:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0000_s3z.nc",
+        "2025-01-02 15:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0003_s3z.nc",
+        "2025-01-02 18:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0006_s3z.nc",
+        "2025-01-02 21:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0009_s3z.nc",
+        "2025-01-03 00:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0012_s3z.nc",
+        "2025-01-03 03:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0015_s3z.nc",
+        "2025-01-03 06:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0018_s3z.nc",
+        "2025-01-03 09:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0021_s3z.nc"
+      },
+      "hycom_variable": "salinity",
+      "api0_tag": "salinity",
+      "api1_data_type": "DT_ENV_SALT"
+    },
+    "topography": {
+      "mode": "file",
+      "file": "../JD功能开发/HYdata/GEBCO_2026_sub_ice.nc",
+      "api0_tag": "topography",
+      "api1_data_type": "DT_ENV_TOPOGRAPHY"
+    },
+    "ice": {
+      "mode": "file",
+      "file": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0000_ice.nc",
+      "files": {
+        "2025-01-02 12:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0000_ice.nc",
+        "2025-01-02 13:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0001_ice.nc",
+        "2025-01-02 14:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0002_ice.nc",
+        "2025-01-02 15:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0003_ice.nc",
+        "2025-01-02 16:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0004_ice.nc",
+        "2025-01-02 17:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0005_ice.nc",
+        "2025-01-02 18:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0006_ice.nc",
+        "2025-01-02 19:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0007_ice.nc",
+        "2025-01-02 20:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0008_ice.nc",
+        "2025-01-02 21:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0009_ice.nc",
+        "2025-01-02 22:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0010_ice.nc",
+        "2025-01-02 23:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0011_ice.nc",
+        "2025-01-03 00:00:00": "../JD功能开发/HYdata/US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0012_ice.nc"
+      },
+      "hycom_variable": "sih",
+      "api0_tag": "ice_thickness",
+      "api1_data_type": "DT_ENV_ICE_THICKNESS"
+    },
+    "bottom_geoacoustics": {
+      "mode": "file",
+      "interpolation": "nearest",
+      "file": "../JD功能开发/HYdata/global_geoacoustic_v0_4_1_1000Hz.nc",
+      "variables": {
+        "DT_ENV_GEOACOUSTIC_CLASSID": "lithology_class_id",
+        "DT_ENV_GEOACOUSTIC_CP": "cp_m_s_prior",
+        "DT_ENV_GEOACOUSTIC_ALPHA_P": "alpha_p_db_per_lambda_prior",
+        "DT_ENV_GEOACOUSTIC_DENSITY": "bulk_density_kg_m3",
+        "DT_ENV_GEOACOUSTIC_POROSITY": "surface_porosity_fraction",
+        "DT_ENV_GEOACOUSTIC_THICKNESS": "total_sediment_thickness_m"
+      }
+    }
+  },
+  "DATA_SERVICES": {
+    "hycom": {
+      "type": "hycom_ncss",
+      "latest_opendap_url": "https://tds.hycom.org/thredds/dodsC/GLBy0.08/latest",
+      "latest_ncss_urls": [
+        "https://tds.hycom.org/thredds/ncss/grid/GLBy0.08/latest",
+        "https://ncss.hycom.org/thredds/ncss/grid/GLBy0.08/latest"
+      ],
+      "active_temperature_ncss_template": "https://tds.hycom.org/thredds/ncss/grid/ESPC-D-V02/t3z/{year}",
+      "active_salinity_ncss_template": "https://tds.hycom.org/thredds/ncss/grid/ESPC-D-V02/s3z/{year}",
+      "ice_latest_ncss_urls": [
+        "https://tds.hycom.org/thredds/ncss/grid/GLBy0.08/latest",
+        "https://ncss.hycom.org/thredds/ncss/grid/GLBy0.08/latest"
+      ],
+      "active_ice_ncss_urls": [
+        "https://tds.hycom.org/thredds/ncss/grid/ESPC-D-V02/ice",
+        "https://ncss.hycom.org/thredds/ncss/grid/ESPC-D-V02/ice"
+      ],
+      "legacy_ice_ncss_templates": [
+        "https://tds.hycom.org/thredds/ncss/grid/GLBy0.08/expt_93.0/ice/{year}",
+        "https://ncss.hycom.org/thredds/ncss/grid/GLBy0.08/expt_93.0/ice/{year}"
+      ],
+      "legacy_ncss_urls": [
+        "https://tds.hycom.org/thredds/ncss/grid/GLBy0.08/expt_93.0/ts3z",
+        "https://ncss.hycom.org/thredds/ncss/grid/GLBy0.08/expt_93.0/ts3z"
+      ],
+      "history_start": "2018-12-04T00:00:00Z",
+      "active_archive_start": "2024-08-10T00:00:00Z",
+      "time_step_hours": 3,
+      "forecast_hours": 192,
+      "metadata_cache_seconds": 600,
+      "metadata_timeout_seconds": 30,
+      "request_timeout_seconds": 90,
+      "request_margin_degrees": 0.1,
+      "max_request_span_degrees": 12.0,
+      "time_tolerance_hours": 1.6,
+      "endpoint_failover_rounds": 3,
+      "retries": 2
+    },
+    "api0": {
+      "type": "http_file_service",
+      "base_url": "http://192.168.14.58:8089",
+      "token": "",
+      "token_env": "OCEAN_API0_TOKEN",
+      "file_type": "global_3D",
+      "request": {
+        "depth_per_request": 5,
+        "pad_deg": 0.5
+      },
+      "path_mapping": {
+        "source_root": "/app/uploads",
+        "local_root": "/mnt/ocean-data/ocean-cloud/uploads"
+      }
+    },
+    "api1": {
+      "type": "postgres_file_catalog",
+      "host": "127.0.0.1",
+      "port": 5432,
+      "dbname": "test_9_28",
+      "user": "postgres",
+      "password": "",
+      "connect_timeout": 20,
+      "table": "datasetFileCatalog",
+      "default_time": "2025-01-02 12:00:00"
+    }
+  },
+  "JOBS_DIR": "jobs",
+  "MAX_SOURCES": 441,
+  "DEPTH_GRID_M": [
+    0,
+    10,
+    20,
+    30,
+    50,
+    75,
+    100,
+    125,
+    150,
+    200,
+    250,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900,
+    1000,
+    1100,
+    1200,
+    1300,
+    1400,
+    1500,
+    1750,
+    2000,
+    2500,
+    3000,
+    3500,
+    4000,
+    4500,
+    5000,
+    5500,
+    6000,
+    6500,
+    7000,
+    7500,
+    8000,
+    8500,
+    9000,
+    9500,
+    10000
+  ],
+  "ENVIRONMENT_NOISE_DATA": {
+    "_说明": "AnalyseEnvironmentNoise 非冰区环境噪声配置。CALCULATION_MODE=manual_levels 时使用请求中的航运、风和雨等级模型；CALCULATION_MODE=source_grid 时使用分布式噪声源网格，请求体可保留等级字段但计算时忽略。",
+    "CALCULATION_MODE": "manual_levels",
+    "_CURRENT_20HZ说明": "AnalyseEnvironmentNoise 传 sourceGridModel=ainslie_urick_jomopans_20hz 时，使用 Ainslie 风、Urick+Ma-Nystuen 雨和 JOMOPANS-ECHO AIS 源谱，20–1000 Hz 每20 Hz调用经典 Bellhop，默认积分半径60 km；legacy 保留原模型。",
+    "DEFAULT_SOURCE_GRID_MODEL": "legacy",
+    "CURRENT_20HZ_ENVIRONMENT_PRODUCT": "output/environment_sources_20250102_12utc_20hz_v1/global_environment_source_spectrum_20hz.nc",
+    "CURRENT_20HZ_SHIPPING_PRODUCT": "output/shipping_sources_ais_20261015_03_jomopans_20hz_v1/shipping_source_spectrum_20hz.nc",
+    "CURRENT_20HZ_MODEL_TIME_UTC": "2025-01-02T12:00:00Z",
+    "CURRENT_20HZ_RADIUS_KM": 60.0,
+    "CURRENT_20HZ_MAX_RADIUS_KM": 60.0,
+    "CURRENT_20HZ_TL_RANGE_COUNT": 301,
+    "CURRENT_20HZ_FREQUENCY_WORKERS": 4,
+    "WIND_SOURCE_PRODUCT_GLOB": "jobs/global_wind_noise_*/global_wind_noise_sources*.nc",
+    "RAIN_SOURCE_PRODUCT_GLOB": "jobs/global_rain_noise_*/global_rain_noise_sources*.nc",
+    "SHIPPING_SOURCE_PRODUCT_GLOB": "jobs/shipping_sources_ais_*_final/shipping_sources*.nc",
+    "ON_DEMAND_SOURCE_BUILD_ENABLED": true,
+    "SOURCE_CACHE_ROOT": "jobs",
+    "SOURCE_RAW_DATA_DIR": "../JD功能开发/HYdata",
+    "WIND_SOURCE_BUILD_CONFIG": "config/global_wind_noise.json",
+    "RAIN_SOURCE_BUILD_CONFIG": "config/global_rain_noise.json",
+    "SHIPPING_SOURCE_BUILD_CONFIG": "config/global_shipping_noise_ais.json",
+    "SHIPPING_RAW_INPUT_TEMPLATE": "../JD功能开发/HYdata/ais_{ais_tag}.jsonl/ais_{ais_tag}.jsonl",
+    "ACOUSTIC_MODEL": "bellhop",
+    "LOW_FREQUENCY_ACOUSTIC_MODEL": "ram",
+    "HIGH_FREQUENCY_ACOUSTIC_MODEL": "bellhop",
+    "PROPAGATION_MODEL_CROSSOVER_HZ": 500.0,
+    "MIN_FREQUENCY_HZ": 10.0,
+    "MAX_FREQUENCY_HZ": 1000.0,
+    "DEFAULT_RADIUS_KM": 100.0,
+    "MAX_RADIUS_KM": 150.0,
+    "MAX_WIND_SOURCE_CELLS": 441,
+    "MAX_RAIN_SOURCE_CELLS": 441,
+    "MAX_SHIPPING_SOURCE_CELLS": 5000,
+    "MAX_RESPONSE_POINTS": 2000,
+    "PROPAGATION_FREQUENCY_COUNT": 5,
+    "SECTOR_COUNT": 8,
+    "LIU2022_REFINED_SECTOR_COUNT": 24,
+    "LIU2022_REFINED_RADIAL_STEP_KM": 2.5,
+    "TL_DEPTH_COUNT": 41,
+    "TL_RANGE_COUNT": 121
+  },
+  "VISUALIZATION": {
+    "HORIZONTAL_TL_GRID_COUNT": 181,
+    "SECTION_TL_RANGE_COUNT": 260,
+    "SECTION_TL_DEPTH_COUNT": 180,
+    "HEATMAP_SMOOTHING": "best",
+    "TOPIC_TL_COLORSCALE": "near_red_jet",
+    "MAIN_TL_CAXIS_MIN_DB": 80,
+    "MAIN_TL_CAXIS_MAX_DB": 130,
+    "TOPIC_TL_CAXIS_MIN_DB": 50,
+    "TOPIC_TL_CAXIS_MAX_DB": 100
+  },
+  "TASK_DEFAULTS": {
+    "center_lat": 16.0,
+    "center_lon": 115.0,
+    "single_lat": 16.0,
+    "single_lon": 115.0,
+    "region_lat_min": 15.0,
+    "region_lat_max": 17.0,
+    "region_lon_min": 89.0,
+    "region_lon_max": 91.0,
+    "source_spacing_deg": 0.1,
+    "freq_hz": 3000.0,
+    "source_depth_m": 150.0,
+    "receiver_depth_max_m": 1500.0,
+    "radius_km": 100.0,
+    "n_grid": 51,
+    "section_count": 13,
+    "alpha_min": -10.0,
+    "alpha_max": 10.0,
+    "beta_min": 0.0,
+    "beta_max": 359.0,
+    "horizontal_tl_depth_m": 150.0,
+    "selected_section_theta_deg": 0.0,
+    "selected_section_depth_m": 1500.0,
+    "tl_caxis_min_db": 80.0,
+    "tl_caxis_max_db": 130.0,
+    "acoustic_model": "bellhop"
+  },
+  "PORTAL_API": {
+    "REQUEST_DEFAULTS": {
+      "coordX": 115.0,
+      "coordY": 16.0,
+      "dataSource": "HYCOM",
+      "dataType": "DT_ENV_SOUND",
+      "time": "2025-01-02 12:00:00",
+      "timeRes": 0,
+      "rdataSource": "HYCOM",
+      "rtime": "2025-01-04 12:00:00",
+      "rtimeRes": 0,
+      "srcDepth": 150.0,
+      "maxFreq": 100,
+      "minFreq": 100,
+      "grazingAngle": 0,
+      "beamWidth": 90,
+      "seaState": 0,
+      "coherent": false,
+      "isWaterChanged": true
+    },
+    "TWO_D_TRANSMISSION_LOSS": {
+      "_网格说明": "TL 距离/深度点数由所选模型配置文件中的 TL_N_RANGE 和 TL_N_RD 控制。",
+      "INTERFACES": [
+        "/Analyse2DTLRD",
+        "/AnalyseIce2DTLRD"
+      ],
+      "FUNCTION": "二维传播损失网格",
+      "NSD": 1,
+      "RD_M": [
+        0,
+        "auto"
+      ],
+      "R_KM": [
+        0,
+        "request.range"
+      ],
+      "RUN_TYPE": "C",
+      "NBEAMS": 0
+    },
+    "TWO_D_RAY_TRACK": {
+      "_网格说明": "声线接收距离/深度点数由 bellhop_config.json 的 N_RANGE 和 N_RD 控制。",
+      "INTERFACES": [
+        "/Analyse2DRTRD",
+        "/Analyse2DRTRDDynamic",
+        "/AnalyseIce2DRTRD",
+        "/AnalyseIce2DRTRDDynamic"
+      ],
+      "FUNCTION": "二维声线网格",
+      "NSD": 1,
+      "RD_M": [
+        0,
+        "auto"
+      ],
+      "R_KM": [
+        0,
+        "request.range"
+      ],
+      "RUN_TYPE": "R",
+      "NBEAMS": 0
+    },
+    "THREE_D_RAY_TRACK": {
+      "_说明": "多方位动态声线按 sector 在全圆内自动生成等间隔方位，方位任务由 Bellhop 方位线程池并发执行。",
+      "INTERFACES": [
+        "/Analyse3DRTRDDynamic"
+      ],
+      "FUNCTION": "三维多方位动态声线",
+      "DEFAULT_SECTOR": 4
+    },
+    "THREE_D_TRANSMISSION_LOSS": {
+      "_网格说明": "TL 距离/深度点数由所选模型配置文件中的 TL_N_RANGE 和 TL_N_RD 控制。",
+      "INTERFACES": [
+        "/Analyse3DTLRD",
+        "/AnalyseIce3DTLRD"
+      ],
+      "FUNCTION": "三维传播损失网格",
+      "NSD": 1,
+      "RD_M": [
+        0,
+        "auto"
+      ],
+      "R_KM": [
+        0,
+        "request.range"
+      ],
+      "RUN_TYPE": "C",
+      "NBEAMS": 0,
+      "DEFAULT_SECTOR": 4
+    }
+  }
+}
