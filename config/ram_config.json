@@ -1,0 +1,99 @@
+{
+  "_说明": "RAM 独立求解配置。标准 RAM 1.5 为压力释放海面；冰区接口保留冰厚输出，并在结果中标记该物理限制。",
+  "CONFIG_VERSION": "2026.09.20-ram-v2",
+  "N_2D_PROFILES": 21,
+  "TL_N_RANGE": 301,
+  "TL_N_RD": 101,
+  "EXECUTABLES": {
+    "RAM": "../ram.exe"
+  },
+  "OUTPUT": {
+    "DIRECTORY": "../jobs_ram",
+    "WRITE_NETCDF": true
+  },
+  "RUNTIME": {
+    "TIMEOUT_SECONDS": 600
+  },
+  "MODEL": {
+    "TITLE": "RAM range-dependent ocean waveguide",
+    "FREQUENCY_HZ": 100.0,
+    "SOURCE_DEPTH_M": 100.0,
+    "RECEIVER_DEPTH_M": 100.0,
+    "MAX_RANGE_M": 100000.0,
+    "RANGE_STEP_M": 50.0,
+    "RANGE_OUTPUT_DECIMATION": 10,
+    "MAX_DEPTH_M": 800.0,
+    "DEPTH_STEP_M": 1.0,
+    "DEPTH_OUTPUT_DECIMATION": 5,
+    "OUTPUT_DEPTH_MAX_M": 500.0,
+    "REFERENCE_SOUND_SPEED_MPS": 1500.0,
+    "PADE_TERMS": 8,
+    "STABILITY_CONSTRAINTS": 1,
+    "STABILITY_DISABLE_RANGE_M": 0.0
+  },
+  "ENVIRONMENT": {
+    "BATHYMETRY": [
+      [
+        0.0,
+        500.0
+      ],
+      [
+        100000.0,
+        500.0
+      ]
+    ],
+    "PROFILES": [
+      {
+        "START_RANGE_M": 0.0,
+        "WATER_SOUND_SPEED_MPS": [
+          [
+            0.0,
+            1500.0
+          ],
+          [
+            100.0,
+            1495.0
+          ],
+          [
+            300.0,
+            1490.0
+          ],
+          [
+            500.0,
+            1500.0
+          ]
+        ],
+        "BOTTOM_SOUND_SPEED_MPS": [
+          [
+            0.0,
+            1700.0
+          ]
+        ],
+        "BOTTOM_DENSITY_G_CM3": [
+          [
+            0.0,
+            1.8
+          ]
+        ],
+        "BOTTOM_ATTENUATION_DB_PER_WAVELENGTH": [
+          [
+            0.0,
+            0.5
+          ],
+          [
+            700.0,
+            0.5
+          ],
+          [
+            800.0,
+            10.0
+          ]
+        ]
+      }
+    ]
+  },
+  "ICE": {
+    "SUPPORTED": false,
+    "NOTE": "标准 RAM 1.5 不包含冰盖上边界，冰区接口仅附加冰厚数据。"
+  }
+}

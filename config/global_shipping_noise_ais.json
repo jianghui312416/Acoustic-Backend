@@ -1,0 +1,48 @@
+{
+  "model_id": "ais_shipping_source_grid_article_v2",
+  "input_format": "ais_jsonl",
+  "time_utc": "2026-10-15T03:00:00Z",
+  "grid_step_deg": 0.1,
+  "averaging_period": "observed_window",
+  "source_depth_m": 5.0,
+  "minimum_sog_kn": 0.5,
+  "maximum_track_gap_seconds": 300.0,
+  "maximum_implied_speed_kn": 80.0,
+  "segment_step_seconds": 30.0,
+  "frequency_hz": [63.0, 1000.0],
+  "article_reference": {
+    "title": "Underwater noise modeling of Arctic shipping scenarios in Eclipse Sound, Nunavut: Assessing acoustic conditions in narwhal habitat",
+    "journal": "Marine Pollution Bulletin 233 (2026) 120142",
+    "doi": "10.1016/j.marpolbul.2026.120142"
+  },
+  "article_class_msl": {
+    "cargo": {
+      "mean_db_re_1upa_m": [157.8, 136.1],
+      "sd_db": [7.2, 4.8]
+    },
+    "tanker": {
+      "mean_db_re_1upa_m": [170.1, 144.7],
+      "sd_db": [11.5, 8.9]
+    },
+    "icebreaker": {
+      "mean_db_re_1upa_m": [151.0, 144.4],
+      "sd_db": [7.5, 8.2]
+    },
+    "passenger": {
+      "mean_db_re_1upa_m": [147.0, 132.4],
+      "sd_db": [7.9, 2.8]
+    }
+  },
+  "ais_type_group_mapping": {
+    "passenger": {"article_class": "passenger", "mapping": "direct"},
+    "cargo": {"article_class": "cargo", "mapping": "direct"},
+    "tanker": {"article_class": "tanker", "mapping": "direct"},
+    "fishing": {"article_class": null, "mapping": "excluded_not_in_article"},
+    "wing_in_ground": {"article_class": null, "mapping": "excluded_not_in_article"},
+    "service": {"article_class": null, "mapping": "excluded_not_in_article"},
+    "pleasure_or_sailing": {"article_class": null, "mapping": "excluded_not_in_article"},
+    "high_speed_craft": {"article_class": null, "mapping": "excluded_not_in_article"},
+    "other": {"article_class": null, "mapping": "excluded_not_in_article"},
+    "unavailable": {"article_class": null, "mapping": "excluded_missing_type"}
+  }
+}

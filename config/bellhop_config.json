@@ -1,0 +1,134 @@
+{
+  "_说明": "Bellhop 求解器、环境文件、并行和海底声学配置。N_2D_PROFILES 表示请求半径内（含两端）的距离采样点数，保护距离在其后追加。",
+  "BELLHOP_CXX": "../bellhop.exe",
+  "BELLHOP_CXX3d": "../bellhop3d.exe",
+  "BELLHOP_PARALLEL_MODE": "outer",
+  "PADDING_KM": 100.0,
+  "BOX_GUARD_KM": 20.0,
+  "TRACE_EXTRA_KM": 5.0,
+  "N_ALPHA": 21,
+  "N_RANGE": 301,
+  "N_RD": 101,
+  "TL_N_RANGE": 301,
+  "TL_N_RD": 101,
+  "STEP_M": 50.0,
+  "N_2D_PROFILES": 21,
+  "MAX_2D_WORKERS": 12,
+  "MAX_WAIT_TIME": 600.0,
+  "MAX_SOURCE_PROCESSES": 4,
+  "BEARING_THREADS_PER_SOURCE": 4,
+  "ICE_REFLECTION": {
+    "DOMAIN_AGGREGATE": "median",
+    "MIN_DOMAIN_CELLS": 3,
+    "FORCE_MODEL": "auto",
+    "ENFORCE_PASSIVE": true
+  },
+  "BELLHOP_ENV": {
+    "TITLE_PREFIX": "Bellhop 2D",
+    "N_MEDIA": 1,
+    "SSP": {
+      "MODE": "range_dependent",
+      "MEAN_INTERPOLATION": "C",
+      "RANGE_DEPENDENT_INTERPOLATION": "Q"
+    },
+    "SURFACE": {
+      "BOUNDARY_CONDITION": "V",
+      "ATTENUATION_UNITS": "W",
+      "VOLUME_ATTENUATION": "",
+      "USE_ALTIMETRY_FILE": true
+    },
+    "BOTTOM": {
+      "BOUNDARY_CONDITION": "A",
+      "USE_BATHYMETRY_FILE": true,
+      "BATHYMETRY_INTERPOLATION": "L",
+      "ROUGHNESS_M": 0.0,
+      "COMPRESSIONAL_SPEED_MPS": 1600.0,
+      "SHEAR_SPEED_MPS": 0.0,
+      "DENSITY_G_CM3": 1.8,
+      "COMPRESSIONAL_ATTENUATION": 0.8,
+      "SHEAR_ATTENUATION": 0.0
+    },
+    "RAY_RUN_TYPE": "R",
+    "TL_RUN_TYPE": "I",
+    "BEAM_TYPE": "G",
+    "RECEIVER_DEPTH_MIN_M": 0.0,
+    "RECEIVER_RANGE_MIN_KM": 0.0,
+    "DEPTH_GUARD_M": 10.0,
+    "ZBOX_MARGIN_M": 10.0
+  },
+  "BOTTOM_GEOACOUSTICS": {
+    "ENABLED": false,
+    "REQUIRED_FIELDS": [
+      "density_g_cm3",
+      "compressional_attenuation"
+    ],
+    "NETCDF_VARIABLES": {
+      "compressional_speed_mps": [
+        "bottom_cp",
+        "sediment_cp",
+        "compressional_speed",
+        "cp"
+      ],
+      "shear_speed_mps": [
+        "bottom_cs",
+        "sediment_cs",
+        "shear_speed",
+        "cs"
+      ],
+      "density_g_cm3": [
+        "bottom_density",
+        "sediment_density",
+        "density",
+        "rho"
+      ],
+      "compressional_attenuation": [
+        "bottom_alpha_p",
+        "sediment_alpha_p",
+        "compressional_attenuation",
+        "alpha_p"
+      ],
+      "shear_attenuation": [
+        "bottom_alpha_s",
+        "sediment_alpha_s",
+        "shear_attenuation",
+        "alpha_s"
+      ]
+    },
+    "SCALE": {
+      "compressional_speed_mps": 1.0,
+      "shear_speed_mps": 1.0,
+      "density_g_cm3": 1.0,
+      "compressional_attenuation": 1.0,
+      "shear_attenuation": 1.0
+    },
+    "OFFSET": {
+      "compressional_speed_mps": 0.0,
+      "shear_speed_mps": 0.0,
+      "density_g_cm3": 0.0,
+      "compressional_attenuation": 0.0,
+      "shear_attenuation": 0.0
+    },
+    "VALID_RANGES": {
+      "compressional_speed_mps": [
+        1000.0,
+        6000.0
+      ],
+      "shear_speed_mps": [
+        0.0,
+        4000.0
+      ],
+      "density_g_cm3": [
+        0.5,
+        4.0
+      ],
+      "compressional_attenuation": [
+        0.0,
+        100.0
+      ],
+      "shear_attenuation": [
+        0.0,
+        100.0
+      ]
+    }
+  }
+}

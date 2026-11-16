@@ -1,0 +1,7 @@
+.venv/
+jobs/
+__pycache__/
+*.py[cod]
+config/aisstream_api_key.txt
+bellhop.exe
+ram.exe

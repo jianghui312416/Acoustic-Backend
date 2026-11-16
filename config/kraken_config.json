@@ -1,0 +1,95 @@
+{
+  "_说明": "Kraken/FIELD 独立求解配置；冰区使用 Kraken 的 Twersky 表面散射参数。",
+  "CONFIG_VERSION": "2026.09.22-kraken-v3",
+  "N_2D_PROFILES": 21,
+  "TL_N_RANGE": 301,
+  "TL_N_RD": 101,
+  "EXECUTABLES": {
+    "KRAKEN": "../kraken.exe",
+    "FIELD": "../field.exe"
+  },
+  "OUTPUT": {
+    "DIRECTORY": "../jobs_kraken",
+    "WRITE_NETCDF": true
+  },
+  "RUNTIME": {
+    "TIMEOUT_SECONDS": 6000,
+    "RUN_FIELD": true
+  },
+  "RANGE_DEPENDENT": {
+    "_说明": "N_2D_PROFILES 在本文件顶层配置，包含 0 km 和最大距离两个端点；ENABLED 控制是否根据实际 SSP/地形变化自动分段，明确请求水体变化时仍会强制分段。",
+    "ENABLED": true,
+    "BATHYMETRY_TOLERANCE_M": 0.5,
+    "SOUND_SPEED_TOLERANCE_MPS": 0.05
+  },
+  "ENVIRONMENT": {
+    "TITLE": "Kraken range-independent ocean waveguide",
+    "FREQUENCY_HZ": 100.0,
+    "INTERPOLATION": "C",
+    "TOP_BOUNDARY": "V",
+    "ATTENUATION_UNITS": "W",
+    "MESH_POINTS": 0,
+    "INTERFACE_ROUGHNESS_M": 0.0,
+    "WATER_DEPTH_M": 500.0,
+    "SOUND_SPEED_PROFILE": [
+      [
+        0.0,
+        1500.0
+      ],
+      [
+        100.0,
+        1495.0
+      ],
+      [
+        300.0,
+        1490.0
+      ],
+      [
+        500.0,
+        1500.0
+      ]
+    ],
+    "WATER_DENSITY_G_CM3": 1.0,
+    "WATER_ATTENUATION": 0.0,
+    "BOTTOM": {
+      "BOUNDARY_CONDITION": "A",
+      "ROUGHNESS_M": 0.0,
+      "COMPRESSIONAL_SPEED_MPS": 1700.0,
+      "SHEAR_SPEED_MPS": 0.0,
+      "DENSITY_G_CM3": 1.8,
+      "COMPRESSIONAL_ATTENUATION": 0.5,
+      "SHEAR_ATTENUATION": 0.0
+    },
+    "PHASE_SPEED_MIN_MPS": 0.0,
+    "PHASE_SPEED_MAX_MPS": 1700.0,
+    "MAX_RANGE_KM": 100.0
+  },
+  "FIELD": {
+    "SOURCE_TYPE": "R",
+    "MODE_THEORY": "A",
+    "MAX_MODES": 9999,
+    "SOURCE_DEPTHS_M": [
+      100.0
+    ],
+    "RECEIVER_DEPTHS_M": [
+      10.0,
+      50.0,
+      100.0,
+      150.0,
+      200.0,
+      300.0,
+      400.0,
+      490.0
+    ],
+    "RECEIVER_RANGES_KM": {
+      "MIN": 0.1,
+      "MAX": 100.0
+    }
+  },
+  "ICE": {
+    "TOP_BOUNDARY": "T",
+    "BUMDEN": 0.01,
+    "ETA_M": 8.2,
+    "XI_M": 5.1
+  }
+}

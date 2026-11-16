@@ -1,0 +1,52 @@
+"""当前前端实际使用的门户 Plugin 与 SN 对应表。"""
+
+from __future__ import annotations
+
+
+PORTAL_PLUGIN_SN_MAP: dict[str, int] = {
+    # backend_worker 的公共协议/文档辅助函数仍会读取完整编号表；dispatcher
+    # 只登记下面当前前端实际可调用的子集。
+    "AnalyseRayTracing": 16,
+    "Analyse2DTLRD": 16,
+    "Analyse3DTLRD": 16,
+    "Analyse2DRTRD": 19,
+    "Analyse2DRTRDDynamic": 19,
+    "Analyse3DRTRDDynamic": 19,
+    "AnalyseIce2DTLRD": 16,
+    "AnalyseIce3DTLRD": 16,
+    "AnalyseIce2DRTRD": 19,
+    "AnalyseIce2DRTRDDynamic": 19,
+    "AnalyseIce3DRTRDDynamic": 19,
+    "GetEnvDataStation": 22,
+    "AnalyseKraken2DTLRD": 14,
+    "AnalyseKraken3DTLRD": 15,
+    "AnalyseIceKraken2DTLRD": 16,
+    "AnalyseIceKraken3DTLRD": 17,
+    "Analyse2DTLRDPE": 16,
+    "AnalyseRam3DTLRD": 19,
+    "AnalyseIce2DTLRDPE": 16,
+    "AnalyseIceRam3DTLRD": 21,
+    "GetEnvDataRoute": 110,
+    "GetEnvDataRegion": 145,
+    "GetEnvDataSourceList": 1,
+    "FetchTimeToList": 2,
+    "GetDataTypeMetaInfo": 1,
+    "AnalyseEnvironmentNoise": 16,
+    "AnalyseReverberation": 16,
+    "AnalyseIceReverberation": 16,
+    "AnalyseBottomSurfaceReverberation": 23,
+    "AnalyseWaveguide": 16,
+    "AnalyseIceWaveguide": 16,
+    "AnalyseWaveguideDecay": 16,
+    "AnalyseSoundLayer": 16,
+    "AnalyseSoundSpeedClass": 16,
+    "AnalyseChannelAxis": 16,
+    "AnalyseChannelImpulseResponse": 24,
+    "AnalyseSoundPropagationLoss": 16,
+    "AnalyseArcticMixedLayer": 16,
+    "AnalyseReverbDecay": 16,
+    "GetWeatherForecast": 146,
+    "GetRealtimeAIS": 147,
+    "AnalyseForecastEnvironmentNoise": 148,
+    "GetRegionalWeatherForecast": 149,
+}

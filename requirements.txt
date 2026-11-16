@@ -1,0 +1,24 @@
+# Bellhop Web + FastAPI/WebSocket current version
+# Recommended runtime: CPython 3.11.x (64-bit)
+# Install with: python -m pip install -r requirements.txt
+
+# Web backend
+fastapi==0.118.0
+uvicorn[standard]==0.37.0
+
+# Numerical / acoustic-field processing
+numpy==2.4.6
+scipy==1.17.1
+h5py==3.16.0
+
+# NetCDF / ocean environmental data
+netCDF4==1.7.4
+
+# HTTP data acquisition
+requests==2.34.2
+websockets==17.2
+
+# PostgreSQL environmental-data mode.
+# database_source.py imports psycopg2 lazily, but keeping this package here
+# makes both file/NetCDF mode and PostgreSQL mode available in one venv.
+psycopg2-binary==2.9.12

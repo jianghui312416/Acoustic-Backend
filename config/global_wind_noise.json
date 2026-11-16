@@ -1,0 +1,35 @@
+{
+  "_description": "Scan every matching ERA5 u10/v10 NetCDF file and rebuild a multi-time global wind-noise source product.",
+  "wind_file_glob": "ERA5-10m-*_ws.nc",
+  "frequency_hz": [
+    500,
+    630,
+    800,
+    1000,
+    1250,
+    1600,
+    2000,
+    2500,
+    3150,
+    4000,
+    5000,
+    6300,
+    8000,
+    10000,
+    12500,
+    13500,
+    16000,
+    20000
+  ],
+  "source_depth_m": 1.0,
+  "reference_transfer_integral_m2": 3.141592653589793,
+  "ocean_mask": {
+    "file": "US058GCOM-OPSnce.espc-d-031-hycom_fcst_glby008_2025010212_t0000_t3z.nc",
+    "variable": "water_temp",
+    "time_index": 0,
+    "depth_index": 0,
+    "ocean_rule": "finite"
+  },
+  "chunk_latitude_count": 48,
+  "chunk_longitude_count": 360
+}
