@@ -20,6 +20,7 @@ from .registry import PORTAL_PLUGIN_SN_MAP
 
 PLUGIN_NAME = "GetRealtimeAIS"
 ROUTE_PATH = "/GetRealtimeAIS"
+TRACK_ROUTE_PATH = "/GetRealtimeAISTrack"
 SN = PORTAL_PLUGIN_SN_MAP[PLUGIN_NAME]
 REQUEST_FIELDS = {
     "bottomLeftX",
@@ -220,6 +221,37 @@ def create_router():
             return await asyncio.to_thread(calculate, request_payload, core)
         except core.PortalRequestError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @router.get(
+        TRACK_ROUTE_PATH,
+        summary="获取单船实时 AIS 航迹",
+        description=(
+            "供前端直接 GET。返回指定 MMSI 的最新状态，以及当前时刻向前"
+            "五分钟滚动窗口内该船的真实位置序列。AISStream API Key 由服务端保管。"
+        ),
+    )
+    async def get_realtime_ais_track(
+        mmsi: int = Query(..., description="9 位 MMSI"),
+        duration_seconds: float = Query(
+            DEFAULT_DURATION_SECONDS,
+            alias="durationSeconds",
+            description="向当前时刻回看的历史窗口秒数，默认和最大均为 300 秒",
+        ),
+    ):
+        if not 100_000_000 <= mmsi <= 999_999_999:
+            raise HTTPException(status_code=400, detail="mmsi 必须是 9 位有效 MMSI")
+        try:
+            return await asyncio.to_thread(
+                service.fetch_vessel_track,
+                mmsi=mmsi,
+                duration_seconds=duration_seconds,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except service.AISStreamError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 

@@ -251,6 +251,23 @@ class _AisCollector:
         previous = self.positions.get(vessel_mmsi, {})
         reports = list(previous.get("_reports", ()))
         reports.append((received_tick, data_time))
+        track = list(previous.get("_track", ()))
+        track_point = {
+            "longitude": longitude,
+            "latitude": latitude,
+            "sog_kn": sog if sog is not None and 0 <= sog < 102.3 else None,
+            "cog_deg": cog if cog is not None and 0 <= cog < 360 else None,
+            "heading_deg": heading if heading is not None and 0 <= heading < 360 else None,
+            "data_time_utc": data_time,
+            "_received_monotonic": received_tick,
+        }
+        # AISStream 偶尔会重发完全相同的位置报文。单船航迹只保留一次，
+        # 避免前端折线出现大量零长度线段。
+        if not track or any(
+            track[-1].get(name) != track_point.get(name)
+            for name in ("longitude", "latitude", "data_time_utc")
+        ):
+            track.append(track_point)
         position = {
             "longitude": longitude,
             "latitude": latitude,
@@ -261,6 +278,7 @@ class _AisCollector:
             "data_time_utc": data_time,
             "_received_monotonic": received_tick,
             "_reports": reports,
+            "_track": track,
         }
         position.update(_cached_static(vessel_mmsi))
         for field in (
@@ -287,6 +305,11 @@ class _AisCollector:
                 stale.append(mmsi)
             else:
                 position["_reports"] = reports
+                position["_track"] = [
+                    point
+                    for point in position.get("_track", ())
+                    if point.get("_received_monotonic", 0.0) >= cutoff_monotonic
+                ]
         for mmsi in stale:
             self.positions.pop(mmsi, None)
 
@@ -317,6 +340,7 @@ class _AisCollector:
                 if since_monotonic is None or report[0] >= since_monotonic
             ]
             merged.pop("_received_monotonic", None)
+            merged.pop("_track", None)
             if reports:
                 merged["first_seen_utc"] = reports[0][1]
                 merged["last_seen_utc"] = reports[-1][1]
@@ -523,6 +547,47 @@ class _RollingAisFeed:
             "stream_error": last_error,
         }
 
+    def vessel_track(
+        self,
+        *,
+        mmsi: int,
+        window_seconds: float,
+    ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], dict[str, Any]]:
+        """返回一艘船的最新状态和滚动窗口内的真实位置序列。"""
+        now_tick = monotonic()
+        cutoff = now_tick - window_seconds
+        with self.lock:
+            self.collector.prune(now_tick - self.retention_seconds)
+            raw = self.collector.positions.get(mmsi)
+            vessel = None
+            track: list[dict[str, Any]] = []
+            if raw is not None:
+                vessel = dict(raw)
+                vessel.pop("_received_monotonic", None)
+                vessel.pop("_reports", None)
+                vessel.pop("_track", None)
+                vessel.update(_cached_static(mmsi))
+                for point in raw.get("_track", ()):
+                    if point.get("_received_monotonic", 0.0) < cutoff:
+                        continue
+                    clean = dict(point)
+                    clean.pop("_received_monotonic", None)
+                    track.append(clean)
+            started = self.coverage_started_monotonic
+            connected = self.connected
+            last_error = self.last_error
+        coverage_seconds = (
+            min(window_seconds, max(0.0, now_tick - started))
+            if started is not None
+            else 0.0
+        )
+        return vessel, track, {
+            "history_coverage_seconds": round(coverage_seconds, 3),
+            "history_complete": coverage_seconds >= window_seconds - 0.5,
+            "stream_connected": connected,
+            "stream_error": last_error,
+        }
+
 
 _ROLLING_FEED = _RollingAisFeed()
 
@@ -579,4 +644,38 @@ def fetch_vessels(
             "船型、船长、船宽和吃水来自低频静态 AIS 报文；"
             "本次窗口及服务缓存均未收到时返回 null。"
         ),
+    }
+
+
+def fetch_vessel_track(
+    *,
+    mmsi: int,
+    duration_seconds: float = ROLLING_HISTORY_SECONDS,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    """返回指定 MMSI 的最新状态及最近一段时间的真实 AIS 航迹。"""
+    vessel_mmsi = int(mmsi)
+    if not 100_000_000 <= vessel_mmsi <= 999_999_999:
+        raise ValueError("mmsi 必须是 9 位有效 MMSI")
+    window_seconds = min(float(ROLLING_HISTORY_SECONDS), max(2.0, float(duration_seconds)))
+    feed = _ROLLING_FEED
+    feed.ensure_started(api_key or resolve_api_key())
+    feed.wait_for_initial_window()
+    snapshot_time = datetime.now(timezone.utc)
+    vessel, track, feed_meta = feed.vessel_track(
+        mmsi=vessel_mmsi,
+        window_seconds=window_seconds,
+    )
+    return {
+        "source": "AISStream",
+        "mmsi": vessel_mmsi,
+        "snapshot_time_utc": snapshot_time.isoformat(timespec="milliseconds").replace(
+            "+00:00", "Z"
+        ),
+        "history_window_seconds": window_seconds,
+        **feed_meta,
+        "found": vessel is not None,
+        "vessel": vessel,
+        "track_point_count": len(track),
+        "track": track,
     }

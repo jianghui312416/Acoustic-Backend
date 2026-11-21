@@ -3950,6 +3950,7 @@ def info():
             "weather_forecast": "/GetWeatherForecast",
             "regional_weather_forecast": "/GetRegionalWeatherForecast",
             "realtime_ais": "/GetRealtimeAIS",
+            "realtime_ais_track": "/GetRealtimeAISTrack",
             "forecast_environment_noise": "/AnalyseForecastEnvironmentNoise",
         },
         "catalog_endpoints": {
@@ -4462,6 +4463,7 @@ _FRONTEND_ROUTE_PATHS = {
     "/GetWeatherForecast",
     "/GetRegionalWeatherForecast",
     "/GetRealtimeAIS",
+    "/GetRealtimeAISTrack",
     "/AnalyseForecastEnvironmentNoise",
     "/AnalyseRegionalForecastEnvironmentNoise",
     "/GetRegionalOceanCurrent",
