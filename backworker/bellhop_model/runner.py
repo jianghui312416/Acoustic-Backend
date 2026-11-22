@@ -369,21 +369,47 @@ def _source_offsets(points: Sequence[Mapping[str, Any]]) -> List[Tuple[float, fl
     return result
 
 
+def _core_padded_axis(radius_km: float, core_count: int, padding_km: float) -> Tuple[np.ndarray, int]:
+    """生成“传播区域细网格 + 外围稀疏保护区”的声源相对坐标轴。
+
+    ``core_count`` 只定义 ``[-radius_km, radius_km]`` 有效传播区域中的节点数。
+    padding 仍完整保留，但使用旧版整幅网格的近似间距追加节点，避免为了短距离
+    传播把温盐/声速三维环境场扩张到数百平方节点。
+    """
+    radius = float(radius_km)
+    padding = max(0.0, float(padding_km))
+    count = max(3, int(core_count))
+    core = np.linspace(-radius, radius, count, dtype=np.float64)
+    if padding <= 0.0:
+        return core, 0
+
+    # 旧语义中 n_grid 个节点覆盖整个 R + padding 区域；外围继续采用不粗于
+    # 该间距的采样，而有效传播区域固定保留 core_count 个节点。
+    legacy_spacing = 2.0 * (radius + padding) / float(count - 1)
+    padding_count = max(1, int(math.ceil(padding / legacy_spacing)))
+    left = np.linspace(-(radius + padding), -radius, padding_count + 1, dtype=np.float64)[:-1]
+    right = np.linspace(radius, radius + padding, padding_count + 1, dtype=np.float64)[1:]
+    return np.concatenate((left, core, right)), padding_count
+
+
 def _local_grid(lat: float, lon: float, radius_km: float, n_grid: int, padding_km: float) -> Dict[str, Any]:
-    """围绕声源建立用于采样环境数据的局部经纬度网格。"""
+    """围绕声源建立局部环境网格；n_grid 表示有效传播区域的节点数。"""
     half = radius_km + padding_km
+    relative_axis, padding_count = _core_padded_axis(radius_km, n_grid, padding_km)
     origin_lon_value, origin_lat_value = bellhop_results.local_offset_to_lonlat(
         np.asarray(-half), np.asarray(-half), lon, lat
     )
     origin_lon, origin_lat = float(origin_lon_value), float(origin_lat_value)
-    x_axis = np.linspace(0.0, 2.0 * half, n_grid)
-    y_axis = np.linspace(0.0, 2.0 * half, n_grid)
-    xx, yy = np.meshgrid(x_axis, y_axis)
-    grid_lon, grid_lat = bellhop_results.local_offset_to_lonlat(xx, yy, origin_lon, origin_lat)
     source_x_value, source_y_value = bellhop_results.lonlat_to_local_offset(
         np.asarray(lon), np.asarray(lat), origin_lon, origin_lat
     )
     source_x, source_y = float(source_x_value), float(source_y_value)
+    # 以反算得到的声源坐标为中心铺设相对轴，确保 51 等奇数核心网格的中心
+    # 节点严格落在声源，而不是受局部投影往返误差影响。
+    x_axis = source_x + relative_axis
+    y_axis = source_y + relative_axis
+    xx, yy = np.meshgrid(x_axis, y_axis)
+    grid_lon, grid_lat = bellhop_results.local_offset_to_lonlat(xx, yy, origin_lon, origin_lat)
     x_rel = xx - source_x
     y_rel = yy - source_y
     return {
@@ -395,6 +421,9 @@ def _local_grid(lat: float, lon: float, radius_km: float, n_grid: int, padding_k
         "lon": grid_lon, "lat": grid_lat,
         "source_x_km": source_x, "source_y_km": source_y,
         "padding_km": padding_km, "half_km": half,
+        "core_grid_count": int(n_grid),
+        "padding_grid_count_per_side": padding_count,
+        "grid_layout": "core_plus_sparse_padding",
     }
 
 
