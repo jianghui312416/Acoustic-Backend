@@ -367,7 +367,7 @@ async def _collect(
         async with websockets.connect(
             AISSTREAM_URL,
             compression="deflate",
-            open_timeout=8,
+            open_timeout=45,
             close_timeout=2,
             ping_interval=20,
             ping_timeout=20,
@@ -447,7 +447,7 @@ class _RollingAisFeed:
                 async with websockets.connect(
                     AISSTREAM_URL,
                     compression="deflate",
-                    open_timeout=8,
+                    open_timeout=45,
                     close_timeout=2,
                     ping_interval=20,
                     ping_timeout=20,
