@@ -18,6 +18,7 @@ from urllib3.util.retry import Retry
 
 
 ENSEMBLE_URL = "https://ensemble-api.open-meteo.com/v1/ensemble"
+STANDARD_URL = "https://api.open-meteo.com/v1/forecast"
 MARINE_URL = "https://marine-api.open-meteo.com/v1/marine"
 WEATHERNEXT_MODEL = "google_weathernext2_ensemble"
 # 区域覆盖层只消费集合均值。直接使用官方预计算均值，避免为每个0.25°网格点
@@ -96,22 +97,31 @@ class OpenMeteoError(RuntimeError):
 
 def _new_session() -> requests.Session:
     retry = Retry(
-        total=2,
-        connect=2,
-        read=2,
-        backoff_factor=0.4,
+        total=4,
+        connect=4,
+        read=4,
+        other=4,
+        backoff_factor=0.8,
         status_forcelist=(429, 500, 502, 503, 504),
         allowed_methods=frozenset({"GET"}),
     )
     session = requests.Session()
-    session.headers.update({"User-Agent": "XWOcean-weather-service/1.0"})
-    session.mount("https://", HTTPAdapter(max_retries=retry))
+    # Open-Meteo 的 TLS 长连接在部分网络/代理下会返回 SSLEOFError；
+    # 强制每次请求重新握手，并允许 urllib3 对 SSL/协议错误重试。
+    session.headers.update({
+        "User-Agent": "XWOcean-weather-service/1.0",
+        "Accept": "application/json",
+        "Connection": "close",
+    })
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=4, pool_maxsize=4)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
     return session
 
 
 def _get_json(session: Any, url: str, params: Mapping[str, Any]) -> Mapping[str, Any]:
     try:
-        response = session.get(url, params=dict(params), timeout=(5, 30))
+        response = session.get(url, params=dict(params), timeout=(15, 60))
         response.raise_for_status()
         payload = response.json()
     except requests.RequestException as exc:
@@ -127,12 +137,29 @@ def _get_json(session: Any, url: str, params: Mapping[str, Any]) -> Mapping[str,
     return payload
 
 
+def _get_weather_json(
+    session: Any, params: Mapping[str, Any]
+) -> tuple[Mapping[str, Any], bool]:
+    """优先使用 WeatherNext2 集合接口；该域名不可达时回退到标准预报接口。"""
+    try:
+        return _get_json(session, ENSEMBLE_URL, params), False
+    except OpenMeteoError as ensemble_error:
+        fallback = dict(params)
+        fallback.pop("models", None)
+        try:
+            return _get_json(session, STANDARD_URL, fallback), True
+        except OpenMeteoError as fallback_error:
+            raise OpenMeteoError(
+                f"{ensemble_error}；标准预报回退也失败：{fallback_error}"
+            ) from fallback_error
+
+
 def _get_json_many(
     session: Any, url: str, params: Mapping[str, Any], expected: int
 ) -> list[Mapping[str, Any]]:
     """请求多个坐标；Open-Meteo 对多坐标返回对象数组。"""
     try:
-        response = session.get(url, params=dict(params), timeout=(5, 60))
+        response = session.get(url, params=dict(params), timeout=(15, 90))
         response.raise_for_status()
         payload = response.json()
     except requests.RequestException as exc:
@@ -153,6 +180,22 @@ def _get_json_many(
                 f"Open-Meteo 拒绝批量请求：{item.get('reason') or '未知原因'}"
             )
     return results
+
+
+def _get_weather_json_many(
+    session: Any, params: Mapping[str, Any], expected: int
+) -> tuple[list[Mapping[str, Any]], bool]:
+    try:
+        return _get_json_many(session, ENSEMBLE_URL, params, expected), False
+    except OpenMeteoError as ensemble_error:
+        fallback = dict(params)
+        fallback.pop("models", None)
+        try:
+            return _get_json_many(session, STANDARD_URL, fallback, expected), True
+        except OpenMeteoError as fallback_error:
+            raise OpenMeteoError(
+                f"{ensemble_error}；标准预报回退也失败：{fallback_error}"
+            ) from fallback_error
 
 
 class _MemoryResponse:
@@ -517,9 +560,8 @@ def fetch_forecast(
             "forecast_hours": forecast_hours,
             "timezone": "GMT",
         }
-        weather = _get_json(
+        weather, weather_fallback = _get_weather_json(
             client,
-            ENSEMBLE_URL,
             {
                 **common,
                 "hourly": ",".join(WEATHER_VARIABLES),
@@ -640,7 +682,10 @@ def fetch_forecast(
         "lon": float(longitude),
         "model_run": weather.get("model_run"),
         "now_index": 0,
-        "provider": "open-meteo/weathernext2-ensemble",
+        "provider": (
+            "open-meteo/best-match (weathernext2 fallback)"
+            if weather_fallback else "open-meteo/weathernext2-ensemble"
+        ),
     }
     if cache_key is not None:
         _put_cached(cache_key, result)
@@ -709,9 +754,8 @@ def fetch_forecasts(
                     "forecast_hours": forecast_hours,
                     "timezone": "GMT",
                 }
-                weather_items = _get_json_many(
+                weather_items, _weather_fallback = _get_weather_json_many(
                     client,
-                    ENSEMBLE_URL,
                     {
                         **common,
                         "hourly": ",".join(REGIONAL_WEATHER_VARIABLES),

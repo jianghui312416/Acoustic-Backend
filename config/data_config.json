@@ -199,6 +199,12 @@
       "default_time": "2025-01-02 12:00:00"
     }
   },
+  "SEAFLOOR_FEATURES": {
+    "file": "../JD功能开发/HYdata/features.xlsx",
+    "name_map_file": "../JD功能开发/HYdata/gebco_scufn_zh_mapping.json",
+    "origin_max_chars": 320,
+    "_说明": "GEBCO SCUFN 国际海底地名数据；name_map_file 为民政部海底地名中文对照表"
+  },
   "JOBS_DIR": "jobs",
   "MAX_SOURCES": 441,
   "DEPTH_GRID_M": [

@@ -27,6 +27,7 @@ from .get_env_data_route import handle as handle_env_data_route
 from .get_realtime_ais import handle as handle_realtime_ais
 from .get_regional_weather_forecast import handle as handle_regional_weather_forecast
 from .get_regional_ocean_current import handle as handle_regional_ocean_current
+from .get_seafloor_features import handle as handle_seafloor_features
 from .get_weather_forecast import handle as handle_weather_forecast
 from .ice_2d_rt import handle as handle_ice_2d_rt
 from .ice_2d_rt_dynamic import handle as handle_ice_2d_rt_dynamic
@@ -120,6 +121,7 @@ PORTAL_HANDLERS: dict[str, PortalHandler] = {
     "GetRegionalWeatherForecast": handle_regional_weather_forecast,
     "AnalyseRegionalForecastEnvironmentNoise": handle_regional_forecast_environment_noise,
     "GetRegionalOceanCurrent": handle_regional_ocean_current,
+    "GetSeafloorFeatures": handle_seafloor_features,
 }
 
 PORTAL_ENDPOINTS = {

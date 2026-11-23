@@ -1,0 +1,17 @@
+HTTP/1.1 200 OK
+Date: Mon, 23 Nov 2026 06:54:05 GMT
+Content-Type: application/json;charset=UTF-8
+Transfer-Encoding: chunked
+Connection: keep-alive
+Set-Cookie: https_waf_cookie=3c5f9d05-38cc-4993b414dfa41be79c81595b9b98e9e91fe1; Expires=1795424040; Path=/; Secure; HttpOnly
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Headers: DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type
+Access-Control-Allow-Methods: GET,POST
+X-Frame-Options: SAMEORIGIN
+X-XSS-Protection: 1; mode=block
+X-Content-Type-Options: nosniff
+Strict-Transport-Security: max-age=0; preload
+X-Request-Id: 547178295c4893d831a65c08118f88df
+Server: WAF
+X-Ser: i34482_c26441, i2017353_c24365
+

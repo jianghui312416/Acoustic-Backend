@@ -78,6 +78,10 @@ def _native_axis(start: float, end: float) -> list[float]:
     ]
 
 
+def _normalize_longitude(value: float) -> float:
+    return ((float(value) + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
+
+
 def _value_at(hourly: dict[str, Any], name: str, index: int) -> float | None:
     values = hourly.get(name)
     if not isinstance(values, list) or index >= len(values):
@@ -129,7 +133,7 @@ def fetch_region_forecast(
 
     if point_fetcher is open_meteo_weather.fetch_forecast:
         forecasts = open_meteo_weather.fetch_forecasts(
-            [(longitude, latitude) for _, _, longitude, latitude in jobs],
+            [(_normalize_longitude(longitude), latitude) for _, _, longitude, latitude in jobs],
             forecast_hours=REGIONAL_CACHE_FORECAST_HOURS,
             now_utc=current_hour,
         )
@@ -140,7 +144,7 @@ def fetch_region_forecast(
         def fetch(job):
             row, column, longitude, latitude = job
             forecast = point_fetcher(
-                longitude,
+                _normalize_longitude(longitude),
                 latitude,
                 forecast_hours=REGIONAL_CACHE_FORECAST_HOURS,
                 now_utc=current_hour,

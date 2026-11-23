@@ -3162,6 +3162,7 @@ from backworker.api_endpoints.get_realtime_ais import create_router as _create_r
 from backworker.api_endpoints.analyse_forecast_environment_noise import create_router as _create_forecast_environment_noise_router
 from backworker.api_endpoints.analyse_regional_forecast_environment_noise import create_router as _create_regional_forecast_environment_noise_router
 from backworker.api_endpoints.get_regional_ocean_current import create_router as _create_regional_ocean_current_router
+from backworker.api_endpoints.get_seafloor_features import create_router as _create_seafloor_features_router
 
 @app.post("/", summary="当前前端统一门户接口")
 async def _unified_portal_endpoint(request: Request):
@@ -3175,6 +3176,7 @@ app.include_router(_create_realtime_ais_router())
 app.include_router(_create_forecast_environment_noise_router())
 app.include_router(_create_regional_forecast_environment_noise_router())
 app.include_router(_create_regional_ocean_current_router())
+app.include_router(_create_seafloor_features_router())
 
 
 # =============================================================================
@@ -4467,6 +4469,7 @@ _FRONTEND_ROUTE_PATHS = {
     "/AnalyseForecastEnvironmentNoise",
     "/AnalyseRegionalForecastEnvironmentNoise",
     "/GetRegionalOceanCurrent",
+    "/GetSeafloorFeatures",
     "/jobs",
     "/jobs/{job_id}/visualization",
     "/jobs/{job_id}",

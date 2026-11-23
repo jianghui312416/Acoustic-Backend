@@ -260,8 +260,8 @@ def _normalize_source_route(
         previous = (lon, lat)
     if len(route) < 1:
         raise SignalTransmissionError("发射航线至少需要一个航迹点。")
-    if len(route) > 1000:
-        raise SignalTransmissionError("一次传输计算最多支持1000个航迹点。")
+    # if len(route) > 1000:
+    #     raise SignalTransmissionError("一次传输计算最多支持1000个航迹点。")
     return route
 
 

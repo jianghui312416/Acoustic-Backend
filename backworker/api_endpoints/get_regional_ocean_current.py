@@ -47,7 +47,7 @@ def _normalise_request(data: Mapping[str, Any], core: Any, plugin_name: str = PL
     north = core._api_float(data, ("topRightY",), None, "北边界 topRightY")
     if not all(math.isfinite(value) for value in (west, south, east, north)):
         raise core.PortalRequestError("经纬度范围必须是有限数。")
-    if not -180.0 <= west < east <= 180.0:
+    if not -180.0 <= west <= 180.0 or east <= west or east - west > 360.0:
         raise core.PortalRequestError("经度必须满足 -180 ≤ bottomLeftX < topRightX ≤ 180。")
     if not -80.0 <= south < north <= 90.0:
         raise core.PortalRequestError("HYCOM纬度必须满足 -80 ≤ bottomLeftY < topRightY ≤ 90。")
