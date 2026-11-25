@@ -511,25 +511,30 @@ def acquire(
     source: AcousticEnvironmentSource,
 ) -> PreparedAcousticEnvironment:
     """一次性读取所有声源需要的共享环境数据。"""
-    topography_file = source.resolve_topography_file(params, config)
-    topography_path = Path(str(topography_file))
-    if not topography_path.is_file():
-        raise FileNotFoundError(f"地形文件不存在：{topography_file or '(空路径)'}")
+    from .netcdf_access_lock import locked as netcdf_read_locked
 
-    topography = source.open_topography(topography_path)
-    source_grids = source.build_source_grids(points, params, settings)
-    data_access = source.open_data_access(params, config)
-    try:
-        data_access.validate()
-        shared_environment = source.prepare_shared_environment(
-            data_access,
-            topography,
-            source_grids,
-            settings,
-        )
-    except Exception:
-        data_access.close()
-        raise
+    # 所有模型统一从这里进入环境数据读取。锁由 dispatcher 父进程创建并注入
+    # 四个声场 worker，只保护 NetCDF/HDF5 打开和复制到内存的阶段。
+    with netcdf_read_locked():
+        topography_file = source.resolve_topography_file(params, config)
+        topography_path = Path(str(topography_file))
+        if not topography_path.is_file():
+            raise FileNotFoundError(f"地形文件不存在：{topography_file or '(空路径)'}")
+
+        topography = source.open_topography(topography_path)
+        source_grids = source.build_source_grids(points, params, settings)
+        data_access = source.open_data_access(params, config)
+        try:
+            data_access.validate()
+            shared_environment = source.prepare_shared_environment(
+                data_access,
+                topography,
+                source_grids,
+                settings,
+            )
+        except Exception:
+            data_access.close()
+            raise
 
     return PreparedAcousticEnvironment(
         params=params,

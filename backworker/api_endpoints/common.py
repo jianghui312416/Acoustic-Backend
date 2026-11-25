@@ -14,6 +14,8 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
+from ..netcdf_access_lock import locked as netcdf_locked
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,13 +41,16 @@ def handle_portal_payload(
     - response_payload：放入门户响应 Response 字段的业务结果；
     - job_id：如果该接口会启动计算任务，就返回任务号；否则返回 None。
     """
+    from .. import auth_context
     from .. import backend_worker as core
 
     meta = None
+    job_id = None
     try:
         core._reload_config_if_changed()
         request_payload, meta = core._portal_unit_request(payload, plugin_name)
         response_payload, job_id = build_response(request_payload, core, meta)
+        auth_context.register_job(job_id, plugin_name, "completed")
         # 每个计算接口的响应都留存在对应任务目录，工作区可直接复用，
         # 不必再依赖所有 NetCDF 中间产品。
         if job_id:
@@ -78,6 +83,12 @@ def create_portal_router(route_path: str, handle: Callable[[Any], Any], openapi_
         from .. import backend_worker as core
 
         payload = await core._request_payload(request)
-        return await asyncio.to_thread(handle, payload)
+
+        def run_serialized():
+            # 独立路由不经过 dispatcher；在工作线程入口使用同一把锁。
+            with netcdf_locked():
+                return handle(payload)
+
+        return await asyncio.to_thread(run_serialized)
 
     return router

@@ -13,6 +13,13 @@ if not exist "backworker\backend_worker.py" (
 
 set "PYTHON_EXE=%CD%\.venv\Scripts\python.exe"
 
+rem 方位级并行由应用控制。禁止 NumPy/BLAS 在每个方位线程内再次扩张线程，
+rem 避免 4 进程 x 4 线程被底层库放大成数十个线程。
+set "OMP_NUM_THREADS=1"
+set "OPENBLAS_NUM_THREADS=1"
+set "MKL_NUM_THREADS=1"
+set "NUMEXPR_NUM_THREADS=1"
+
 if not exist "%PYTHON_EXE%" (
     echo [Backend] Python virtual environment is missing. Creating .venv...
     where py >nul 2>&1
@@ -49,12 +56,14 @@ echo [Backend] Starting http://127.0.0.1:8888 ...
 echo [Backend] API documentation: http://127.0.0.1:8888/docs
 echo [Backend] Press Ctrl+C to stop.
 "%PYTHON_EXE%" -m uvicorn backworker.backend_worker:app --host 0.0.0.0 --port 8888
+set "BACKEND_EXIT_CODE=%ERRORLEVEL%"
 
-if errorlevel 1 (
+if not "%BACKEND_EXIT_CODE%"=="0" (
     echo.
-    echo [ERROR] Backend stopped unexpectedly. Check the messages above and whether port 8888 is already in use.
+    echo [ERROR] Backend stopped unexpectedly with exit code %BACKEND_EXIT_CODE%.
+    echo Check the messages above, Windows Event Viewer, and whether port 8888 is already in use.
     pause
-    exit /b 1
+    exit /b %BACKEND_EXIT_CODE%
 )
 
 endlocal

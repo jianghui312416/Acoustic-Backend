@@ -2,6 +2,8 @@
 jobs/
 __pycache__/
 *.py[cod]
-config/aisstream_api_key.txt
+.env
+.env.local
+.env.*.local
 bellhop.exe
 ram.exe

@@ -2,7 +2,7 @@
 后端服务 — 接收参数、执行计算、提供文件下载
 启动: uvicorn backworker.backend_worker:app --host 0.0.0.0 --port 8888
 """
-import os, json, uuid, time, threading, io, zipfile, math, re, queue, asyncio, shutil
+import os, json, uuid, time, threading, io, zipfile, math, re, queue, asyncio, shutil, logging
 from decimal import Decimal
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Mapping, Sequence
@@ -19,6 +19,10 @@ import numpy as np
 # =============================================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        await asyncio.to_thread(auth_database.initialize)
+    except Exception as exc:
+        logging.getLogger(__name__).error("认证数据库初始化失败：%s", exc)
     _reconcile_orphaned_jobs()
     yield
 
@@ -28,7 +32,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "X-Bellhop-Explicit-Submit"],
+    allow_headers=["Content-Type", "Authorization", "X-Bellhop-Explicit-Submit"],
 )
 # 海流接口包含全部深度层，JSON 体积明显大于二维天气网格；传输前压缩，
 # 避免上游下载完成后又因浏览器接收大响应而超时。
@@ -49,6 +53,9 @@ import sys
 sys.path.insert(0, BASE)
 sys.path.insert(0, PROJECT)
 import ice_reflection_trc
+from backworker import auth_context, auth_database, auth_endpoints, auth_service
+from backworker.auth_middleware import AuthMiddleware
+from backworker.compute_limiter import ComputeQueueError, compute_limiter
 from backworker import config_loader
 from backworker import acoustic_environment
 from backworker import acoustic_model_dispatcher
@@ -70,6 +77,11 @@ from backworker.bellhop_model import results as bellhop_results
 from backworker.bellhop_model import runner as bellhop_runner
 from backworker import catalog_queries, database_source, hycom_service
 from backworker.api_endpoints.registry import PORTAL_PLUGIN_SN_MAP
+from backworker.api_endpoints.dispatcher import payload_plugin_name, requires_acoustic_process
+
+# 认证中间件必须覆盖所有业务路由，包括通过 include_router 注册的门户接口。
+app.add_middleware(AuthMiddleware)
+app.include_router(auth_endpoints.router)
 _CONFIG_RELOAD_LOCK = threading.Lock()
 
 
@@ -3167,7 +3179,19 @@ from backworker.api_endpoints.get_seafloor_features import create_router as _cre
 @app.post("/", summary="当前前端统一门户接口")
 async def _unified_portal_endpoint(request: Request):
     payload = await _request_payload(request)
-    return await _dispatch_portal_request_async(payload)
+    user = _request_user(request)
+    user_id = int(user["id"]) if user else None
+    plugin_name = payload_plugin_name(payload)
+    if requires_acoustic_process(plugin_name):
+        try:
+            async with compute_limiter.slot(str(user_id) if user_id else "anonymous"):
+                return await _dispatch_portal_request_async(payload, user_id)
+        except ComputeQueueError as exc:
+            return JSONResponse(
+                {"ok": False, "message": str(exc), "code": "compute_queue_timeout"},
+                status_code=429,
+            )
+    return await _dispatch_portal_request_async(payload, user_id)
 
 
 app.include_router(_create_weather_forecast_router())
@@ -3452,7 +3476,18 @@ async def reverberation_scene(request: Request):
         payload = await request.json()
     except Exception:
         payload = {}
-    return await asyncio.to_thread(_reverberation_scene_sync, payload)
+    try:
+        async with compute_limiter.slot(str(_request_user(request).get("id"))):
+            result = await asyncio.to_thread(_reverberation_scene_sync, payload)
+    except ComputeQueueError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    scene = result.get("scene") if isinstance(result, Mapping) else None
+    if isinstance(scene, Mapping):
+        _register_job_for_request(request, scene.get("bellhop_job_id"), "Reverberation", "completed")
+        _register_job_for_request(
+            request, scene.get("receiver_origin_bellhop_job_id"), "Reverberation", "completed"
+        )
+    return result
 
 
 @app.post("/reverberation/simulate", tags=["Ocean reverberation"])
@@ -3472,6 +3507,8 @@ async def reverberation_simulate(request: Request):
     if bellhop_job_id:
         if not re.fullmatch(r"[A-Za-z0-9_-]{4,80}", bellhop_job_id):
             raise HTTPException(status_code=400, detail="Bellhop 任务号格式无效")
+        if not _job_access_allowed(_request_user(request), bellhop_job_id):
+            raise HTTPException(status_code=404, detail="任务不存在或无权访问")
         section_file = os.path.join(JOBS_DIR, bellhop_job_id, "tl2d_section.nc")
         if not os.path.isfile(section_file):
             raise HTTPException(status_code=404, detail="该任务没有可用的 tl2d_section.nc")
@@ -3486,6 +3523,8 @@ async def reverberation_simulate(request: Request):
     if receiver_origin_job_id:
         if not re.fullmatch(r"[A-Za-z0-9_-]{4,80}", receiver_origin_job_id):
             raise HTTPException(status_code=400, detail="接收端 Bellhop 任务号格式无效")
+        if not _job_access_allowed(_request_user(request), receiver_origin_job_id):
+            raise HTTPException(status_code=404, detail="任务不存在或无权访问")
         section_file = os.path.join(JOBS_DIR, receiver_origin_job_id, "tl2d_section.nc")
         if not os.path.isfile(section_file):
             raise HTTPException(status_code=404, detail="接收端任务没有可用的 tl2d_section.nc")
@@ -3522,6 +3561,17 @@ async def compute(request: Request):
     nonce = str(form.get("submit_nonce", "")).strip()
     if len(nonce) < 12:
         return JSONResponse({"ok": False, "message": "无效提交令牌"}, status_code=400)
+    user = _request_user(request)
+    user_id = int(user["id"]) if user else None
+    try:
+        active_jobs = auth_database.count_active_jobs(user_id) if user_id else 0
+    except auth_database.AuthDatabaseError:
+        active_jobs = 0
+    if user_id and active_jobs >= compute_limiter.max_concurrent():
+        return JSONResponse(
+            {"ok": False, "message": "当前账号存在未完成的声场任务，请等待任务结束后再提交。", "code": "compute_limit"},
+            status_code=429,
+        )
     job_id = uuid.uuid4().hex[:12]
     jd = os.path.join(JOBS_DIR, job_id)
     try:
@@ -3611,6 +3661,7 @@ async def compute(request: Request):
     os.makedirs(jd, exist_ok=True)
     _write_json(os.path.join(jd, "params.json"), params)
     _write_json(os.path.join(jd, "job_status.json"), {"status": "queued", "progress": "排队中", "message": ""})
+    _register_job_for_request(request, job_id, params.get("acoustic_model"), "running")
     threading.Thread(target=_run_job, args=(job_id, jd, params), daemon=True).start()
     return {
         "ok": True,
@@ -3621,12 +3672,70 @@ async def compute(request: Request):
 
 
 # =============================================================================
+# 任务归属与访问控制
+# =============================================================================
+def _request_user(request):
+    return getattr(request.state, "user", None) if request is not None else None
+
+
+def _is_admin(user) -> bool:
+    return bool(user) and str(user.get("role")) == "admin"
+
+
+def _job_access_allowed(user, job_id: str) -> bool:
+    if not user:
+        return False
+    if _is_admin(user):
+        return True
+    try:
+        owner = auth_database.job_owner(job_id)
+    except auth_database.AuthDatabaseError:
+        return False
+    return owner is not None and int(owner) == int(user["id"])
+
+
+def _require_job_access(request, job_id: str) -> dict:
+    user = _request_user(request)
+    if not _job_access_allowed(user, job_id):
+        # 不区分“不存在”和“无权限”，避免泄露其他用户的任务号。
+        raise HTTPException(status_code=404)
+    return user
+
+
+def _owned_job_ids(user) -> set[str] | None:
+    if _is_admin(user):
+        return None
+    try:
+        return auth_database.job_ids_for_user(int(user["id"]))
+    except auth_database.AuthDatabaseError:
+        return set()
+
+
+def _register_job_for_request(request, job_id: str | None, plugin: str | None, status: str = "running") -> None:
+    user = _request_user(request)
+    auth_context.register_job(
+        job_id,
+        plugin,
+        status,
+        int(user["id"]) if user else None,
+    )
+
+
+def _update_job_status_safely(job_id: str, status: str) -> None:
+    try:
+        auth_database.set_job_status(job_id, status)
+    except Exception as exc:
+        logging.getLogger(__name__).debug("更新任务状态失败 job=%s: %s", job_id, exc)
+
+
+# =============================================================================
 # 任务查询和文件下载路由
 # =============================================================================
 @app.get("/status/{job_id}")
-def status(job_id):
+def status(job_id, request: Request):
     if not _safe_id(job_id):
         raise HTTPException(status_code=404)
+    _require_job_access(request, job_id)
     jd = os.path.join(JOBS_DIR, job_id)
     try:
         st = _read_json(os.path.join(jd, "job_status.json"))
@@ -3652,6 +3761,33 @@ def _saved_3d_tl_response_path(job_dir):
             if os.path.isfile(path) and os.path.getsize(path) > 0:
                 return path
     return None
+
+
+def _workspace_field_eligible(params):
+    """与前端 workspaceJobFilter.isWorkspaceFieldParams 保持一致：
+    仅三维运行入口生成的多方位声场任务归入工作区。
+    在 /jobs 汇总里直接给出结论，前端刷新工作区时无需逐个读取 params.json。
+    """
+    if not isinstance(params, dict):
+        return False
+    portal = params.get("portal_request")
+    if not isinstance(portal, dict):
+        portal = {}
+    sector_raw = params.get("section_count")
+    if sector_raw is None:
+        sector_raw = portal.get("sector")
+    try:
+        sector = float(sector_raw)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(sector) or sector <= 1:
+        return False
+    mode = str(params.get("calculation_mode") or "").lower()
+    view = str(params.get("sound_field_view") or "").lower()
+    if mode:
+        return mode == "3d" and (not view or view == "full_3d")
+    # 兼容旧任务参数：没有 calculation_mode 时，以“多扇区且不是固定单方位”判定。
+    return (not portal.get("azimuth")) and sector > 1
 
 
 def _workspace_job_summary(job_id, job_dir):
@@ -3681,6 +3817,7 @@ def _workspace_job_summary(job_id, job_dir):
         "status": status_value,
         "status_label": "完成" if openable else (job_status.get("progress") or "处理中"),
         "openable": bool(openable),
+        "workspace_eligible": _workspace_field_eligible(params),
         "model": model,
         "model_label": "Bellhop 三维声场" if "bellhop" in model.lower() else "三维声场",
         "frequency_hz": params.get("freq_hz", portal.get("calcFrequency")),
@@ -3695,8 +3832,9 @@ def _workspace_job_summary(job_id, job_dir):
 
 
 @app.get("/jobs")
-def list_workspace_jobs(limit: int = 40):
-    limit = max(1, min(100, int(limit or 40)))
+def list_workspace_jobs(request: Request, limit: int = 20):
+    limit = max(1, min(100, int(limit or 20)))
+    owned = _owned_job_ids(_request_user(request))
     jobs = []
     try:
         names = os.listdir(JOBS_DIR)
@@ -3704,6 +3842,8 @@ def list_workspace_jobs(limit: int = 40):
         names = []
     for name in names:
         if not _safe_id(name):
+            continue
+        if owned is not None and name not in owned:
             continue
         job_dir = os.path.join(JOBS_DIR, name)
         if not os.path.isdir(job_dir) or not os.path.isfile(os.path.join(job_dir, "params.json")):
@@ -3716,9 +3856,10 @@ def list_workspace_jobs(limit: int = 40):
 
 
 @app.get("/jobs/{job_id}/visualization")
-def workspace_job_visualization(job_id):
+def workspace_job_visualization(job_id, request: Request):
     if not _safe_id(job_id):
         raise HTTPException(status_code=404)
+    _require_job_access(request, job_id)
     job_dir = os.path.join(JOBS_DIR, job_id)
     summary = _workspace_job_summary(job_id, job_dir)
     if not summary["openable"]:
@@ -3754,9 +3895,10 @@ def workspace_job_visualization(job_id):
 
 
 @app.delete("/jobs/{job_id}")
-def delete_workspace_job(job_id):
+def delete_workspace_job(job_id, request: Request):
     if not _safe_id(job_id):
         raise HTTPException(status_code=404)
+    _require_job_access(request, job_id)
     job_dir = os.path.abspath(os.path.join(JOBS_DIR, job_id))
     jobs_root = os.path.abspath(JOBS_DIR)
     if os.path.commonpath([jobs_root, job_dir]) != jobs_root or not os.path.isdir(job_dir):
@@ -3771,13 +3913,18 @@ def delete_workspace_job(job_id):
         shutil.rmtree(job_dir)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"删除工作失败：{exc}")
+    try:
+        auth_database.delete_job(job_id)
+    except Exception:
+        pass
     return {"ok": True, "job_id": job_id}
 
 
 @app.post("/abandon/{job_id}")
-def abandon(job_id):
+def abandon(job_id, request: Request):
     if not _safe_id(job_id):
         raise HTTPException(status_code=404)
+    _require_job_access(request, job_id)
     jd = os.path.join(JOBS_DIR, job_id)
     status_path = os.path.join(jd, "job_status.json")
     if not os.path.isdir(jd):
@@ -3798,9 +3945,10 @@ def abandon(job_id):
 
 
 @app.get("/file/{job_id}/{filename:path}")
-def job_file(job_id, filename):
+def job_file(job_id, filename, request: Request):
     if not _safe_id(job_id):
         raise HTTPException(status_code=404)
+    _require_job_access(request, job_id)
     jd = os.path.join(JOBS_DIR, job_id)
     safe = os.path.normpath(filename).replace("\\", "/")
     if safe.startswith("../") or safe == ".." or os.path.isabs(safe):
@@ -3814,9 +3962,10 @@ def job_file(job_id, filename):
 
 
 @app.get("/download_results/{job_id}")
-def download_results(job_id):
+def download_results(job_id, request: Request):
     if not _safe_id(job_id):
         raise HTTPException(status_code=404)
+    _require_job_access(request, job_id)
     jd = os.path.join(JOBS_DIR, job_id)
     available = []
     for root, _, files in os.walk(jd):
@@ -3839,9 +3988,10 @@ def download_results(job_id):
 
 
 @app.get("/job_diagnostics/{job_id}")
-def job_diagnostics(job_id):
+def job_diagnostics(job_id, request: Request):
     if not _safe_id(job_id):
         raise HTTPException(status_code=404)
+    _require_job_access(request, job_id)
     jd = os.path.join(JOBS_DIR, job_id)
     chunks = [f"多方位 Bellhop 2D 拼接三维场任务诊断\n任务: {job_id}\n"]
     for root, _, files in os.walk(jd):
@@ -3858,9 +4008,10 @@ def job_diagnostics(job_id):
 
 
 @app.get("/download_job_logs/{job_id}")
-def download_job_logs(job_id):
+def download_job_logs(job_id, request: Request):
     if not _safe_id(job_id):
         raise HTTPException(status_code=404)
+    _require_job_access(request, job_id)
     jd = os.path.join(JOBS_DIR, job_id)
     memory = io.BytesIO()
     with zipfile.ZipFile(memory, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -4021,6 +4172,9 @@ async def array_static_channel(request: Request):
             raise ValueError("缺少 bellhop_job_id")
         ray_job_id = str(payload.get("ray_job_id") or "").strip() or None
         arrival_job_id = str(payload.get("arrival_job_id") or "").strip() or None
+        for referenced in (job_id, ray_job_id, arrival_job_id):
+            if referenced and not _job_access_allowed(_request_user(request), referenced):
+                raise HTTPException(status_code=404, detail="任务不存在或无权访问。")
         session = ArrayFusionSession(jobs_dir=JOBS_DIR)
         await asyncio.to_thread(
             session.bind_bellhop,
@@ -4163,13 +4317,46 @@ async def array_static_communication(request: Request):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _websocket_token(websocket: WebSocket) -> str | None:
+    header = websocket.headers.get("authorization", "")
+    if header.lower().startswith("bearer "):
+        token = header[7:].strip()
+        if token:
+            return token
+    for name in ("access_token", "token"):
+        value = websocket.query_params.get(name)
+        if value:
+            return value.strip()
+    return None
+
+
+async def _websocket_user(websocket: WebSocket):
+    token = _websocket_token(websocket)
+    if not token:
+        return None, None
+    try:
+        user = await asyncio.to_thread(auth_service.resolve_token, token)
+    except auth_database.AuthDatabaseError:
+        return None, None
+    return token, user
+
+
 @app.websocket("/ws/array-fusion")
 async def array_fusion_websocket(websocket: WebSocket):
     """线阵时频域、波束域与声场联动的双向实时数据流。"""
+    _token, user = await _websocket_user(websocket)
+    if not user:
+        await websocket.close(code=4401)
+        return
+
+    def authorize_job(job_id: str) -> bool:
+        return _job_access_allowed(user, job_id)
+
     await serve_array_fusion_websocket(
         websocket,
         jobs_dir=JOBS_DIR,
         profile_provider=_array_fusion_profile_provider,
+        authorize_job=authorize_job,
     )
 
 
@@ -4177,6 +4364,11 @@ async def array_fusion_websocket(websocket: WebSocket):
 async def signal_transmission_websocket(websocket: WebSocket):
     """发射信号、Bellhop 多途、水听器与 ADC 的端到端双向计算流。"""
     import sys
+
+    _token, user = await _websocket_user(websocket)
+    if not user:
+        await websocket.close(code=4401)
+        return
 
     await serve_signal_transmission_websocket(
         websocket,
@@ -4236,9 +4428,13 @@ def _set_job_status(job_id, status_path, payload, event="job_progress"):
 @app.websocket("/ws/jobs/{job_id}")
 async def job_websocket(websocket: WebSocket, job_id):
     """单个计算任务的后端到浏览器实时消息流。"""
+    _token, user = await _websocket_user(websocket)
+    if not user:
+        await websocket.close(code=4401)
+        return
     await websocket.accept()
-    if not _safe_id(job_id):
-        await websocket.close()
+    if not _safe_id(job_id) or not _job_access_allowed(user, job_id):
+        await websocket.close(code=4403)
         return
 
     job_dir = os.path.join(JOBS_DIR, job_id)
@@ -4440,12 +4636,14 @@ def _run_job(job_id, job_dir, params):
                 "source_count": source_count, "completed_tasks": progress_state["task_completed"],
                 "total_tasks": progress_state["task_total"], "percent": 100.0, "ready": True,
             }, event="job_ready")
+            _update_job_status_safely(job_id, "completed")
         else:
             _set_job_status(job_id, status_path, {
                 "status": "failed", "progress": "出错", "message": result.get("message", "未知错误"),
                 "source_count": source_count, "completed_tasks": progress_state["task_completed"],
                 "total_tasks": progress_state["task_total"], "percent": progress_state["task_completed"] / max(1, progress_state["task_total"]) * 90.0,
             }, event="job_failed")
+            _update_job_status_safely(job_id, "failed")
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
@@ -4455,6 +4653,7 @@ def _run_job(job_id, job_dir, params):
             _set_job_status(job_id, status_path, payload, event="job_failed")
         except OSError:
             _publish_job_event(job_id, "job_failed", payload)
+        _update_job_status_safely(job_id, "failed")
 
 
 # 仅暴露当前前端实际调用的路由。保留同文件中的公共计算辅助函数，供门户
@@ -4483,9 +4682,11 @@ _FRONTEND_ROUTE_PATHS = {
     "/docs/oauth2-redirect",
     "/redoc",
 }
+_AUTH_ROUTE_PREFIXES = ("/auth/", "/admin/")
 app.router.routes[:] = [
     route for route in app.router.routes
     if getattr(route, "path", None) in _FRONTEND_ROUTE_PATHS
+    or str(getattr(route, "path", "") or "").startswith(_AUTH_ROUTE_PREFIXES)
 ]
 
 

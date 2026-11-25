@@ -633,7 +633,7 @@ def _extend_sound_speed_to_bathymetry(
     bathymetry: Mapping[str, Any],
     fill_speed_mps: float = 1500.0,
 ) -> Dict[str, Any]:
-    """当真实海深超过 SSP 深度轴时，用固定声速把水体延伸到海底。"""
+    """当真实海深超过 SSP 深度轴时，按末端梯度外插声速到海底。"""
     depth = np.asarray(environment["depth_m"], dtype=np.float64).ravel()
     sound_speed = np.asarray(environment["sound_speed_mps"], dtype=np.float64)
     if depth.ndim != 1 or depth.size < 2 or sound_speed.shape[0] != depth.size:
@@ -664,12 +664,26 @@ def _extend_sound_speed_to_bathymetry(
 
     extended = dict(environment)
     extended["depth_m"] = np.concatenate((depth, extension))
-    fill_shape = (len(extension),) + sound_speed.shape[1:]
+    # 每个水平网格点分别使用最后两个有效深度层的线性梯度外插。HYCOM
+    # 最深层以下仍保留压力导致的声速变化，避免整段水体被硬填为 1500 m/s。
+    # 1400--1700 m/s 与上游环境场的有效范围一致，可抑制异常末端梯度在
+    # 数千米外插距离上被无限放大。仅当末端值或梯度无效时才使用兜底值。
+    terminal_speed = np.asarray(sound_speed[-1], dtype=np.float64)
+    terminal_gradient = (sound_speed[-1] - sound_speed[-2]) / step
+    terminal_speed = np.where(
+        np.isfinite(terminal_speed), terminal_speed, float(fill_speed_mps)
+    )
+    terminal_gradient = np.where(np.isfinite(terminal_gradient), terminal_gradient, 0.0)
+    delta_depth = (extension - profile_bottom).reshape(
+        (len(extension),) + (1,) * terminal_speed.ndim
+    )
+    extrapolated_speed = terminal_speed[None, ...] + delta_depth * terminal_gradient[None, ...]
+    extrapolated_speed = np.clip(extrapolated_speed, 1400.0, 1700.0)
     extended["sound_speed_mps"] = np.concatenate(
-        (sound_speed, np.full(fill_shape, float(fill_speed_mps), dtype=np.float64)),
+        (sound_speed, extrapolated_speed),
         axis=0,
     )
-    # 温盐没有观测依据，仅保持数组维度一致；声学求解只使用上面的 1500 m/s 层。
+    # 温盐没有观测依据，仅保持数组维度一致；声学求解使用上面的外插声速层。
     for name in ("temperature_c", "salinity"):
         values = environment.get(name)
         if values is None:
@@ -1863,12 +1877,25 @@ def _run_solver(
     if is_cxx and singlethread:
         flags.insert(0, "--singlethread")
     command = [executable] + flags + [root_name]
+    process_env = os.environ.copy()
+    if singlethread:
+        # 每个方位已经由外层线程池并行；禁止求解器或其数值库再次扩展线程，
+        # 否则 16 个方位任务会产生远超 16 个 CPU 工作线程。
+        for name in (
+            "OMP_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+            "VECLIB_MAXIMUM_THREADS",
+        ):
+            process_env[name] = "1"
     (work_dir / f"{root_name}_command.txt").write_text(subprocess.list2cmdline(command), encoding="utf-8")
     try:
         completed = subprocess.run(
             command, cwd=str(work_dir), timeout=timeout_sec,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             encoding="utf-8", errors="replace", check=False,
+            env=process_env,
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"Bellhop 运行超过 {timeout_sec:.0f} 秒") from exc
@@ -3276,20 +3303,20 @@ def run(
     progress_thread.start()
 
     try:
-        # 二维请求通常只有一个声源和一个方位。
-        # 在 Windows 上使用 spawn 进程会序列化完整环境数据，单任务时固定开销很大。
-        # 因此单任务直接在当前进程运行；多声源/多方位任务仍走进程池。
-        if len(source_contexts) == 1 and task_count == 1:
+        # 门户的一个三维声场请求只有一个声源。该请求已经位于 dispatcher 的
+        # 专用声场进程中，直接在此进程建立方位线程池，避免再 spawn 一层进程并
+        # 序列化完整环境数据。只有真正的多声源请求才使用下一级声源进程池。
+        if len(source_contexts) == 1:
             context = source_contexts[0]
             source_export = _run_source_process(
                 context,
                 str(out),
                 str(topo_file),
-                1,
+                bearing_threads,
             )
             source_exports.append(source_export)
             progress_state["completed"] = task_count
-            notify("6/7", "已完成 1/1 个二维方位任务；正在导出结果")
+            notify("6/7", f"已完成 {task_count}/{task_count} 个方位任务；正在导出结果")
         else:
             with ProcessPoolExecutor(
                 max_workers=source_process_count,

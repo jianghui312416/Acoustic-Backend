@@ -12,6 +12,8 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Request
 
+from .. import auth_context
+from .. import netcdf_access_lock
 from .analyse_2d_rt_rd import handle as handle_analyse_2d_rt
 from .analyse_2d_rt_rd_dynamic import handle as handle_analyse_2d_rt_dynamic
 from .analyse_2d_tl_rd import handle as handle_analyse_2d_tl
@@ -50,8 +52,19 @@ PortalHandler = Callable[[Any], Any]
 # NetCDF4/HDF5 的 Windows 原生库不能安全地在线程间共享。声场任务固定交给
 # 最多四个 spawn 子进程；每个进程拥有独立的原生库状态。
 ACOUSTIC_PROCESS_COUNT = 4
+ACOUSTIC_BEARING_THREADS_PER_PROCESS = 4
+ACOUSTIC_GLOBAL_BEARING_LIMIT = (
+    ACOUSTIC_PROCESS_COUNT * ACOUSTIC_BEARING_THREADS_PER_PROCESS
+)
 _ACOUSTIC_PLUGIN_MARKERS = ("TLRD", "RTRD", "ImpulseResponse")
 _ACOUSTIC_PROCESS_POOL: ProcessPoolExecutor | None = None
+_ACOUSTIC_MP_CONTEXT = multiprocessing.get_context("spawn")
+# 由父进程创建，再通过 initializer 注入所有声场 worker。不要在 worker
+# 模块导入时各自创建，否则 Windows spawn 下不会得到同一把进程锁。
+_NETCDF_READ_LOCK = _ACOUSTIC_MP_CONTEXT.RLock()
+# 主 Uvicorn 进程中的普通门户请求同样会在线程池里读取 NetCDF。
+# 安装同一把跨进程锁，使主进程和四个声场 worker 的原生库访问互斥。
+netcdf_access_lock.install_process_lock(_NETCDF_READ_LOCK)
 
 
 def _requires_acoustic_process(plugin_name: str) -> bool:
@@ -70,12 +83,20 @@ def _payload_plugin_name(payload: Any) -> str:
     return str(units[0].get("Plugin") or "").strip()
 
 
+def _init_acoustic_worker(netcdf_read_lock) -> None:
+    from ..netcdf_access_lock import install_process_lock
+
+    install_process_lock(netcdf_read_lock)
+
+
 def _get_acoustic_process_pool() -> ProcessPoolExecutor:
     global _ACOUSTIC_PROCESS_POOL
     if _ACOUSTIC_PROCESS_POOL is None:
         _ACOUSTIC_PROCESS_POOL = ProcessPoolExecutor(
             max_workers=ACOUSTIC_PROCESS_COUNT,
-            mp_context=multiprocessing.get_context("spawn"),
+            mp_context=_ACOUSTIC_MP_CONTEXT,
+            initializer=_init_acoustic_worker,
+            initargs=(_NETCDF_READ_LOCK,),
         )
     return _ACOUSTIC_PROCESS_POOL
 
@@ -184,35 +205,52 @@ def resolve_portal_handler(payload: Any) -> tuple[int, str, PortalHandler]:
     return sn, plugin_name, handler
 
 
-def dispatch(payload: Any):
+def dispatch(payload: Any, user_id: int | None = None):
     from .. import backend_worker as core
 
+    context_token = auth_context.set_current_user_id(user_id)
     plugin_name = ""
     try:
         _sn, plugin_name, handler = resolve_portal_handler(payload)
-        return handler(payload)
+        # 声场任务只在 acoustic_environment.acquire() 的 NetCDF 预加载阶段
+        # 持锁，后续 4 线程方位计算不受影响。普通门户请求没有统一的预加载
+        # 边界，因此在业务入口串行化，避免 Uvicorn 线程池并发进入 netCDF C DLL。
+        if _requires_acoustic_process(plugin_name):
+            return handler(payload)
+        with netcdf_access_lock.locked():
+            return handler(payload)
     except core.PortalRequestError as exc:
         meta = _error_meta(payload, plugin_name)
         error_plugin = str(meta.get("plugin") or "") if meta else ""
         return core._portal_failure(exc, 400, meta, error_plugin)
+    finally:
+        auth_context.reset_current_user_id(context_token)
 
 
-async def dispatch_async(payload: Any):
+async def dispatch_async(payload: Any, user_id: int | None = None):
     """声场任务进四进程池；普通门户请求继续使用轻量工作线程。"""
     if not _requires_acoustic_process(_payload_plugin_name(payload)):
-        return await asyncio.to_thread(dispatch, payload)
+        return await asyncio.to_thread(dispatch, payload, user_id)
 
     loop = asyncio.get_running_loop()
     for attempt in range(2):
         pool = _get_acoustic_process_pool()
         try:
-            return await loop.run_in_executor(pool, dispatch, payload)
+            return await loop.run_in_executor(pool, dispatch, payload, user_id)
         except BrokenProcessPool:
             # 原生求解器异常退出只淘汰子进程池，不再带崩主后端；重建后重试一次。
             _discard_acoustic_process_pool(pool)
             if attempt:
                 raise
     raise RuntimeError("声场计算进程池不可用。")
+
+
+def payload_plugin_name(payload: Any) -> str:
+    return _payload_plugin_name(payload)
+
+
+def requires_acoustic_process(plugin_name: str) -> bool:
+    return _requires_acoustic_process(plugin_name)
 
 
 def create_router():
@@ -223,6 +261,7 @@ def create_router():
         from .. import backend_worker as core
 
         payload = await core._request_payload(request)
-        return await dispatch_async(payload)
+        user = getattr(request.state, "user", None)
+        return await dispatch_async(payload, int(user["id"]) if user else None)
 
     return router

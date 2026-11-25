@@ -199,6 +199,27 @@
       "default_time": "2025-01-02 12:00:00"
     }
   },
+  "AUTH": {
+    "_说明": "用户认证与独立 PostgreSQL 数据库配置。认证表位于 acoustic_auth 库，首次启动自动创建；修改本段后无需 env 文件。",
+    "database": {
+      "host": "127.0.0.1",
+      "port": 5432,
+      "dbname": "acoustic_auth",
+      "user": "postgres",
+      "password": "jh312416",
+      "connect_timeout": 5,
+      "pool_max": 10
+    },
+    "admin": {
+      "username": "admin",
+      "password": "admin123456",
+      "email": ""
+    },
+    "token_ttl_hours": 12,
+    "registration_auto_approve": false,
+    "max_concurrent_jobs": 4,
+    "job_queue_wait_seconds": 600
+  },
   "SEAFLOOR_FEATURES": {
     "file": "../JD功能开发/HYdata/features.xlsx",
     "name_map_file": "../JD功能开发/HYdata/gebco_scufn_zh_mapping.json",

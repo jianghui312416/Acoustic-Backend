@@ -3408,6 +3408,7 @@ async def serve_array_fusion_websocket(
     websocket: Any,
     jobs_dir: str | Path | None = None,
     profile_provider: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
+    authorize_job: Callable[[str], bool] | None = None,
 ) -> None:
     """接受一个 FastAPI WebSocket，直到客户端断开为止。"""
 
@@ -3422,6 +3423,21 @@ async def serve_array_fusion_websocket(
                 if not isinstance(payload, dict):
                     raise ValueError("消息必须是 JSON 对象")
                 message_type = str(payload.get("type") or "frame").lower()
+                if authorize_job is not None:
+                    referenced: list[str] = []
+                    for key in ("bellhop_job_id", "job_id", "ray_job_id", "arrival_job_id"):
+                        value = payload.get(key)
+                        if value:
+                            referenced.append(str(value))
+                    snapshots = payload.get("snapshots")
+                    if isinstance(snapshots, list):
+                        for item in snapshots:
+                            if isinstance(item, Mapping):
+                                value = item.get("bellhop_job_id") or item.get("job_id")
+                                if value:
+                                    referenced.append(str(value))
+                    if any(not authorize_job(job) for job in dict.fromkeys(referenced)):
+                        raise ValueError("无权访问指定的声场任务。")
                 if message_type == "config":
                     response = session.configure(payload)
                 elif message_type in ("motion_config", "motion_start"):
