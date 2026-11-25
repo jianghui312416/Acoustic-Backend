@@ -82,6 +82,84 @@ def _depth_mean(u: np.ndarray, v: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return mean_u, mean_v
 
 
+def _axis_tiles(start: float, end: float, maximum_span: float) -> list[tuple[float, float]]:
+    """把一个坐标轴均分为不超过上游安全跨度的连续区间。"""
+    span = float(end) - float(start)
+    if not math.isfinite(span) or span <= 0.0:
+        raise ValueError("HYCOM 区域边界必须是递增的有限数。")
+    count = max(1, int(math.ceil(span / maximum_span)))
+    step = span / count
+    return [
+        (float(start) + index * step, float(end) if index + 1 == count else float(start) + (index + 1) * step)
+        for index in range(count)
+    ]
+
+
+def _tile_bounds(config: Mapping[str, Any], west: float, south: float, east: float, north: float) -> list[tuple[float, float, float, float]]:
+    """按 HYCOM NCSS 的单次限制拆分区域，并预留读取器添加的请求边距。"""
+    options = hycom_service._service_config(config)
+    request_span = max(0.5, float(options.get("max_request_span_degrees", 12.0)))
+    margin = max(0.01, float(options.get("request_margin_degrees", 0.10)))
+    # HycomNcssReader 会在每片四周再扩 margin；减去双侧边距和微小浮点余量，
+    # 保证传给上游的实际 NCSS 子集始终不超过 request_span。
+    core_span = request_span - 2.0 * margin - 1.0e-6
+    if core_span <= 0.0:
+        raise ValueError("HYCOM 单次区域上限必须大于两倍请求边距。")
+    longitude_tiles = _axis_tiles(west, east, core_span)
+    latitude_tiles = _axis_tiles(south, north, core_span)
+    return [
+        (tile_west, tile_south, tile_east, tile_north)
+        for tile_south, tile_north in latitude_tiles
+        for tile_west, tile_east in longitude_tiles
+    ]
+
+
+def _validate_uv_cubes(u_cube: Mapping[str, Any], v_cube: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    depth = np.asarray(u_cube["depth"], dtype=np.float64)
+    lat = np.asarray(u_cube["lat"], dtype=np.float64)
+    lon = np.asarray(u_cube["lon"], dtype=np.float64)
+    u = np.asarray(u_cube["values"], dtype=np.float64)
+    v = np.asarray(v_cube["values"], dtype=np.float64)
+    if u.shape != v.shape or u.shape != (len(depth), len(lat), len(lon)):
+        raise ValueError("HYCOM u/v 海流分量的网格或深度轴不一致。")
+    if not np.allclose(depth, np.asarray(v_cube["depth"], dtype=np.float64), equal_nan=True):
+        raise ValueError("HYCOM u/v 海流分量的深度轴不一致。")
+    if not np.allclose(lat, np.asarray(v_cube["lat"], dtype=np.float64), equal_nan=True) or not np.allclose(
+        lon, np.asarray(v_cube["lon"], dtype=np.float64), equal_nan=True
+    ):
+        raise ValueError("HYCOM u/v 海流分量的水平网格不一致。")
+    return depth, lat, lon, u, v
+
+
+def _merge_tiles(tiles: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """把带边缘重叠的 HYCOM 原生网格片合并，并去除重复坐标。"""
+    if not tiles:
+        raise ValueError("HYCOM 区域分片为空。")
+    if len(tiles) == 1:
+        return tiles[0]
+    depth = tiles[0][0]
+    for tile_depth, *_rest in tiles[1:]:
+        if depth.shape != tile_depth.shape or not np.allclose(depth, tile_depth, equal_nan=True):
+            raise ValueError("HYCOM 区域分片的深度轴不一致。")
+
+    # HYCOM 原生坐标精度远低于 1e-8 度；量化键仅用于消除相邻分片边距产生的重复行列。
+    latitudes = np.asarray(sorted({round(float(value), 8) for tile in tiles for value in tile[1]}), dtype=np.float64)
+    longitudes = np.asarray(sorted({round(float(value), 8) for tile in tiles for value in tile[2]}), dtype=np.float64)
+    lat_index = {round(float(value), 8): index for index, value in enumerate(latitudes)}
+    lon_index = {round(float(value), 8): index for index, value in enumerate(longitudes)}
+    shape = (len(depth), len(latitudes), len(longitudes))
+    merged_u = np.full(shape, np.nan, dtype=np.float64)
+    merged_v = np.full(shape, np.nan, dtype=np.float64)
+    depth_indices = np.arange(len(depth))
+    for _tile_depth, tile_lat, tile_lon, tile_u, tile_v in tiles:
+        row_indices = np.asarray([lat_index[round(float(value), 8)] for value in tile_lat])
+        column_indices = np.asarray([lon_index[round(float(value), 8)] for value in tile_lon])
+        target = np.ix_(depth_indices, row_indices, column_indices)
+        merged_u[target] = tile_u
+        merged_v[target] = tile_v
+    return depth, latitudes, longitudes, merged_u, merged_v
+
+
 def fetch_region_current(
     config: Mapping[str, Any], *, west: float, south: float,
     east: float, north: float, forecast_time: datetime | str,
@@ -116,26 +194,24 @@ def fetch_region_current(
                 forecast_time=selected, _single_flight=True,
             )
 
+    tile_bounds = _tile_bounds(config, west, south, east, north)
     reader = hycom_service.HycomNcssReader(
         config, time_value=selected.strftime("%Y-%m-%d %H:%M:%S")
     )
+    cubes: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
+    product: Any = None
     try:
-        query_lon = np.asarray([west, east], dtype=np.float64)
-        query_lat = np.asarray([south, north], dtype=np.float64)
-        u_cube = reader.read_profile_cube(reader.current_u_tag, query_lon, query_lat)
-        v_cube = reader.read_profile_cube(reader.current_v_tag, query_lon, query_lat)
+        for tile_west, tile_south, tile_east, tile_north in tile_bounds:
+            query_lon = np.asarray([tile_west, tile_east], dtype=np.float64)
+            query_lat = np.asarray([tile_south, tile_north], dtype=np.float64)
+            u_cube = reader.read_profile_cube(reader.current_u_tag, query_lon, query_lat)
+            v_cube = reader.read_profile_cube(reader.current_v_tag, query_lon, query_lat)
+            product = product or u_cube.get("product")
+            cubes.append(_validate_uv_cubes(u_cube, v_cube))
     finally:
         reader.close()
 
-    depth = np.asarray(u_cube["depth"], dtype=np.float64)
-    lat = np.asarray(u_cube["lat"], dtype=np.float64)
-    lon = np.asarray(u_cube["lon"], dtype=np.float64)
-    u = np.asarray(u_cube["values"], dtype=np.float64)
-    v = np.asarray(v_cube["values"], dtype=np.float64)
-    if u.shape != v.shape or u.shape != (len(depth), len(lat), len(lon)):
-        raise ValueError("HYCOM u/v 海流分量的网格或深度轴不一致。")
-    if not np.allclose(depth, np.asarray(v_cube["depth"], dtype=np.float64), equal_nan=True):
-        raise ValueError("HYCOM u/v 海流分量的深度轴不一致。")
+    depth, lat, lon, u, v = _merge_tiles(cubes)
     # 前端统一使用北到南的图像行顺序；HYCOM reader 返回南到北，因此翻转。
     u = u[:, ::-1, :]
     v = v[:, ::-1, :]
@@ -143,7 +219,7 @@ def fetch_region_current(
     mean_u, mean_v = _depth_mean(u, v)
     result = {
         "provider": "HYCOM THREDDS/NCSS",
-        "product": u_cube.get("product"),
+        "product": product,
         "requested_time": _iso(requested),
         "forecast_time": _iso(selected),
         "time_offset_hours": round((selected - requested).total_seconds() / 3600.0, 3),
@@ -154,6 +230,7 @@ def fetch_region_current(
         "grid": {
             "rows": len(lat), "columns": len(lon),
             "row_order": "north_to_south",
+            "tile_count": len(tile_bounds),
             "latitudes": _json_array(lat),
             "longitudes": _json_array(lon),
         },
