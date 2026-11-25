@@ -557,9 +557,22 @@ def _profile_cell_cache(
             z = depth[good]
             v = profile[good]
             order = np.argsort(z)
-            unique[:, point] = np.interp(
-                target_depth, z[order], v[order], left=v[order][0], right=v[order][-1]
-            )
+            z = z[order]
+            v = v[order]
+            sampled = np.interp(target_depth, z, v, left=v[0], right=v[-1])
+            # HYCOM 在局部海底以下通常为缺测。旧逻辑把最深有效温盐值
+            # 原样保持到后续统一深度层，相当于强制末端梯度为零。这里使用
+            # 最后两个真实有效层的梯度做受限线性外推，使浅于下一个统一层
+            # 的实际海底（例如 125 m 有效、海底 130 m）仍保留垂向变化。
+            # 为防止浅水剖面被一直外推到数千米，最多外推一个末端层间距，
+            # 再保持该端值；海底以下的远端值只用于维持矩形 SSP 网格。
+            terminal_step = float(z[-1] - z[-2])
+            if math.isfinite(terminal_step) and terminal_step > 0.0:
+                terminal_gradient = float((v[-1] - v[-2]) / terminal_step)
+                deeper = target_depth > z[-1]
+                delta = np.minimum(target_depth[deeper] - z[-1], terminal_step)
+                sampled[deeper] = v[-1] + delta * terminal_gradient
+            unique[:, point] = sampled
     return unique, inverse
 
 
@@ -1349,6 +1362,61 @@ def _sample_2d_slice(
     }
 
 
+def _apply_requested_terrain_profile(
+    section: Dict[str, Any],
+    terrain_profile: Mapping[str, Any] | None,
+    model_depth_m: float,
+) -> Dict[str, Any]:
+    """用客户端沿当前方位采样的数字地球地形覆盖二维 Bellhop 海底边界。"""
+    if not terrain_profile:
+        return section
+    distances = np.asarray(terrain_profile.get("distance_m"), dtype=np.float64)
+    elevations = np.asarray(terrain_profile.get("elevation_m"), dtype=np.float64)
+    ranges_m = np.asarray(section.get("range_km"), dtype=np.float64) * 1000.0
+    if (
+        distances.ndim != 1
+        or elevations.ndim != 1
+        or distances.size < 2
+        or distances.size != elevations.size
+        or ranges_m.ndim != 1
+        or ranges_m.size < 2
+        or not np.all(np.isfinite(distances))
+        or not np.all(np.isfinite(elevations))
+        or not np.all(np.diff(distances) > 0.0)
+    ):
+        raise ValueError("客户端 terrainProfile 不是有效的严格递增距离—高程剖面。")
+
+    sampled_elevation = np.interp(
+        ranges_m,
+        distances,
+        elevations,
+        left=float(elevations[0]),
+        right=float(elevations[-1]),
+    )
+    land_threshold_m = 1.0
+    land = sampled_elevation > land_threshold_m
+    # 二维声线不能越过陆地后重新进入水域；首个陆地点及其后方统一作为阻断区。
+    land_indices = np.flatnonzero(land)
+    if land_indices.size:
+        land[int(land_indices[0]):] = True
+    # Cesium/GeoVis 在缺少海底高程的水面瓦片上可能返回约 0 m。此类值既不
+    # 应误判为陆地，也不能把水深强行压成 1 m；保留后端环境切片原有水深。
+    bottom = np.asarray(section["bottom_depth_m"], dtype=np.float64).copy()
+    known_water = sampled_elevation < -land_threshold_m
+    bottom[known_water] = -sampled_elevation[known_water]
+    bottom[land] = 1.0
+    bottom = np.clip(bottom, 1.0, max(1.0, float(model_depth_m)))
+    section["bottom_depth_m"] = bottom
+    section["land_mask"] = land
+    section["surface_depth_m"] = np.clip(
+        np.asarray(section["surface_depth_m"], dtype=np.float64),
+        0.0,
+        bottom - 0.5,
+    )
+    section["terrain_profile_source"] = str(terrain_profile.get("source") or "client-terrain")
+    return section
+
+
 def _apply_ssp_mode_to_section(section: Dict[str, Any], ssp_mode: str) -> Dict[str, Any]:
     """按有效 SSP 模式整理切面；固定模式复用距离 0 km 处的声速剖面。"""
     if ssp_mode != "fixed":
@@ -1994,6 +2062,11 @@ def _run_2d_bearing(
         grid, environment, bathymetry, altimetry, bottom_geoacoustics, bearing_deg,
         calculation_radius_km, int(settings["n_2d_profiles"]),
         extra_range_km=profile_extra,
+    )
+    section = _apply_requested_terrain_profile(
+        section,
+        params.get("terrain_profile"),
+        float(np.asarray(environment["depth_m"], dtype=np.float64)[-1]),
     )
     section = _apply_ssp_mode_to_section(section, settings["ssp_mode"])
     if (

@@ -4,6 +4,8 @@ import unittest
 import threading
 import time
 
+import numpy as np
+
 from backworker import auth_config, netcdf_access_lock
 from backworker.api_endpoints import dispatcher
 from backworker.bellhop_model import runner
@@ -99,6 +101,40 @@ class AcousticConcurrencyTests(unittest.TestCase):
             },
         )
         self.assertEqual(plan, (1, 4, 4))
+
+
+class HycomProfileExtrapolationTests(unittest.TestCase):
+    @staticmethod
+    def _cube() -> dict[str, np.ndarray | float]:
+        return {
+            "depth": np.asarray([0.0, 50.0, 100.0, 125.0, 150.0]),
+            "lat": np.asarray([10.0]),
+            "lon": np.asarray([120.0]),
+            "centre_lon": 120.0,
+            "values": np.asarray([20.0, 15.0, 10.0, 8.0, np.nan]).reshape(5, 1, 1),
+        }
+
+    def test_terminal_gradient_is_used_below_deepest_valid_layer(self) -> None:
+        profiles, inverse = runner._profile_cell_cache(
+            self._cube(),
+            np.asarray([100.0, 125.0, 130.0, 150.0]),
+            np.asarray([120.0]),
+            np.asarray([10.0]),
+        )
+
+        np.testing.assert_array_equal(inverse, [0])
+        # 100--125 m 的末端梯度为 -2/25；130 m 应继续该梯度，而不是保持 8。
+        np.testing.assert_allclose(profiles[:, 0], [10.0, 8.0, 7.6, 6.0])
+
+    def test_terminal_extrapolation_is_limited_to_one_native_interval(self) -> None:
+        profiles, _ = runner._profile_cell_cache(
+            self._cube(),
+            np.asarray([150.0, 200.0, 1000.0]),
+            np.asarray([120.0]),
+            np.asarray([10.0]),
+        )
+
+        np.testing.assert_allclose(profiles[:, 0], [6.0, 6.0, 6.0])
 
 
 if __name__ == "__main__":

@@ -169,7 +169,9 @@ PORTAL_COMMON_REQUEST_FIELDS = {
     "grazingAngle", "beamWidth", "isWaterChanged", "receiverDepthMax",
 }
 PORTAL_2D_TL_REQUEST_FIELDS = PORTAL_COMMON_REQUEST_FIELDS.union({"azimuth", "rtimeRes", "seaState", "coherent"})
-PORTAL_2D_RAY_REQUEST_FIELDS = PORTAL_COMMON_REQUEST_FIELDS.union({"azimuth", "lineCount", "rtimeRes"})
+PORTAL_2D_RAY_REQUEST_FIELDS = PORTAL_COMMON_REQUEST_FIELDS.union(
+    {"azimuth", "lineCount", "rtimeRes", "terrainProfile"}
+)
 PORTAL_3D_TL_REQUEST_FIELDS = PORTAL_COMMON_REQUEST_FIELDS.union({"row", "col", "sector", "seaState", "coherent"})
 PORTAL_3D_RAY_REQUEST_FIELDS = PORTAL_3D_TL_REQUEST_FIELDS.union(
     {"lineCount", "rtimeRes"}
@@ -1474,6 +1476,47 @@ def _portal_2d_params(data, include_line_count=False):
         "display_3d_rays": True,
     })
     params["portal_request"]["azimuth"] = azimuth
+    raw_terrain = data.get("terrainProfile")
+    if raw_terrain is not None:
+        if not isinstance(raw_terrain, Mapping):
+            raise PortalRequestError("terrainProfile 必须是包含 distanceM/elevationM 数组的对象。")
+        distances = raw_terrain.get("distanceM")
+        elevations = raw_terrain.get("elevationM")
+        if not isinstance(distances, Sequence) or isinstance(distances, (str, bytes)):
+            raise PortalRequestError("terrainProfile.distanceM 必须是数组。")
+        if not isinstance(elevations, Sequence) or isinstance(elevations, (str, bytes)):
+            raise PortalRequestError("terrainProfile.elevationM 必须是数组。")
+        if len(distances) != len(elevations) or not 2 <= len(distances) <= 4096:
+            raise PortalRequestError("terrainProfile 距离与高程数组长度必须一致，且包含 2 到 4096 点。")
+        clean_distances = []
+        clean_elevations = []
+        previous = -1.0
+        for index, (distance, elevation) in enumerate(zip(distances, elevations)):
+            try:
+                distance_value = float(distance)
+                elevation_value = float(elevation)
+            except (TypeError, ValueError) as exc:
+                raise PortalRequestError(f"terrainProfile 第 {index + 1} 个采样值无效。") from exc
+            if not math.isfinite(distance_value) or not math.isfinite(elevation_value):
+                raise PortalRequestError(f"terrainProfile 第 {index + 1} 个采样值必须为有限数。")
+            if distance_value < 0.0 or distance_value <= previous:
+                raise PortalRequestError("terrainProfile.distanceM 必须从 0 开始严格递增。")
+            clean_distances.append(distance_value)
+            clean_elevations.append(elevation_value)
+            previous = distance_value
+        if clean_distances[0] > 1.0:
+            raise PortalRequestError("terrainProfile 必须包含声源位置（distanceM=0）的地形。")
+        terrain_profile = {
+            "distance_m": clean_distances,
+            "elevation_m": clean_elevations,
+            "source": str(raw_terrain.get("source") or "client-terrain"),
+        }
+        params["terrain_profile"] = terrain_profile
+        params["portal_request"]["terrainProfile"] = {
+            "distanceM": clean_distances,
+            "elevationM": clean_elevations,
+            "source": terrain_profile["source"],
+        }
     line_count = None
     if include_line_count:
         line_count = _api_int(data, ("lineCount", "line_count", "n_alpha"), env_grid["nbeams"], "声线条数")
