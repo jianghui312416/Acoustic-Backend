@@ -118,6 +118,51 @@ def data_source_file(config: Mapping[str, Any], kind: str, time_value: str = "")
     return str(path.resolve())
 
 
+def nearest_data_source_file(config: Mapping[str, Any], kind: str, time_value: str = "") -> str:
+    """返回时次最接近的本地数据文件；用于覆盖时次不完整的慢变数据（如海冰）。
+
+    优先取不晚于请求时次的最近文件；没有更早的文件时再取绝对差最小的文件。
+    没有 ``files`` 映射或请求时次本身可用时，行为与 ``data_source_file`` 一致。
+    """
+    try:
+        return data_source_file(config, kind, time_value)
+    except ValueError:
+        source = data_source_config(config, kind)
+        files = source.get("files")
+        if not isinstance(files, Mapping) or not files:
+            raise
+        from datetime import datetime
+
+        def parse(text: Any):
+            value = _normalise_time_key(text)
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+                try:
+                    return datetime.strptime(value, fmt)
+                except ValueError:
+                    continue
+            return None
+
+        target = parse(time_value)
+        if target is None:
+            return data_source_file(config, kind, "")
+        normalised_keys = {_normalise_time_key(key): str(key) for key in files}
+        candidates = [
+            (key, parse(key))
+            for key in files
+            if parse(key) is not None
+        ]
+        if not candidates:
+            raise
+        preceding = [item for item in candidates if item[1] <= target]
+        chosen = (
+            max(preceding, key=lambda item: item[1])
+            if preceding
+            else min(candidates, key=lambda item: abs((item[1] - target).total_seconds()))
+        )
+        original_key = normalised_keys.get(_normalise_time_key(chosen[0]), chosen[0])
+        return data_source_file(config, kind, original_key)
+
+
 def data_source_tag(config: Mapping[str, Any], kind: str, mode: str, field: str = "") -> str:
     """读取数据变量标识；海浪的三个分量通过 ``field`` 区分。"""
     source = data_source_config(config, kind)

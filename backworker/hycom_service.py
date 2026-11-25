@@ -499,6 +499,17 @@ class HycomNcssReader:
             "requested_time": _display_time(self._requested),
         }
 
+    def prefetch_profile_cube(
+        self, tag: str, query_lon: np.ndarray, query_lat: np.ndarray
+    ) -> None:
+        """下载并缓存一个区域子集，延后到受锁阶段再解析 NetCDF。"""
+        if tag not in {
+            self.temperature_tag, self.salinity_tag, self.current_u_tag,
+            self.current_v_tag, self.ice_tag,
+        }:
+            raise HycomServiceError(f"HYCOM 读取器不支持变量 {tag!r}。")
+        self._download(tag, self._bounds(query_lon, query_lat))
+
     def close(self) -> None:
         self._session.close()
         self._files.clear()

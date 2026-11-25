@@ -241,6 +241,13 @@ def run(request, jobs_dir, core, progress, cancelled):
     job_id = secrets.token_hex(6)
     output = Path(jobs_dir)/job_id/'continuous'
     output.mkdir(parents=True, exist_ok=True)
+    # 保存原始请求，工作区恢复时可按同一参数重放连续链路结果。
+    try:
+        (output/'request.json').write_text(
+            json.dumps(request, ensure_ascii=False), encoding='utf-8'
+        )
+    except (TypeError, ValueError):
+        pass
     progress(
         'waypoint', 0,
         f'开始计算{len(calculation_points)}个Waypoint（最多{min(WAYPOINT_WORKER_COUNT, len(calculation_points))}路并发）',

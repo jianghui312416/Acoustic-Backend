@@ -57,6 +57,9 @@ ACOUSTIC_GLOBAL_BEARING_LIMIT = (
     ACOUSTIC_PROCESS_COUNT * ACOUSTIC_BEARING_THREADS_PER_PROCESS
 )
 _ACOUSTIC_PLUGIN_MARKERS = ("TLRD", "RTRD", "ImpulseResponse")
+# These handlers only read configuration or remote metadata.  They must not
+# queue behind a long-running NetCDF/HDF5 operation.
+_NETCDF_FREE_PLUGINS = frozenset({"GetEnvDataSourceList", "FetchTimeToList"})
 _ACOUSTIC_PROCESS_POOL: ProcessPoolExecutor | None = None
 _ACOUSTIC_MP_CONTEXT = multiprocessing.get_context("spawn")
 # 由父进程创建，再通过 initializer 注入所有声场 worker。不要在 worker
@@ -215,7 +218,7 @@ def dispatch(payload: Any, user_id: int | None = None):
         # 声场任务只在 acoustic_environment.acquire() 的 NetCDF 预加载阶段
         # 持锁，后续 4 线程方位计算不受影响。普通门户请求没有统一的预加载
         # 边界，因此在业务入口串行化，避免 Uvicorn 线程池并发进入 netCDF C DLL。
-        if _requires_acoustic_process(plugin_name):
+        if _requires_acoustic_process(plugin_name) or plugin_name in _NETCDF_FREE_PLUGINS:
             return handler(payload)
         with netcdf_access_lock.locked():
             return handler(payload)

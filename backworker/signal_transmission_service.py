@@ -1062,6 +1062,11 @@ def simulate_signal_transmission(
         source_monitor,
         response,
     )
+    try:
+        request_path = Path(jobs_dir) / str(response["job_id"]) / "signal_transmission" / "request.json"
+        request_path.write_text(json.dumps(dict(request), ensure_ascii=False), encoding="utf-8")
+    except (OSError, TypeError, ValueError):
+        pass
     _progress(progress, "complete", 100, "信号发射—传播—接收链路计算完成")
     return response
 
@@ -1071,9 +1076,21 @@ async def serve_signal_transmission_websocket(
     *,
     jobs_dir: str | Path,
     core: Any,
+    user_id: int | None = None,
 ) -> None:
     """处理一个信号传输 WebSocket 会话。"""
     await websocket.accept()
+
+    def register_job(job_id: Any) -> None:
+        """把信号链任务登记到当前用户，供工作区按任务号恢复。"""
+        if not job_id:
+            return
+        try:
+            core.auth_context.register_job(
+                str(job_id), "SignalTransmission", "completed", user_id
+            )
+        except Exception:
+            pass
     await websocket.send_text(json.dumps({
         "type": "config_ack",
         "protocol": "signal-transmission-v1",
@@ -1143,6 +1160,8 @@ async def serve_signal_transmission_websocket(
                         if event is None:
                             break
                         await websocket.send_text(json.dumps(event, ensure_ascii=False))
+                        if event.get('type') == 'stream_complete':
+                            register_job(event.get('job_id'))
                         if event.get('type') == 'chunk':
                             control = json.loads(await disconnect)
                             if control.get('type') != 'continue':
@@ -1186,6 +1205,7 @@ async def serve_signal_transmission_websocket(
                     "message": str(exc) or exc.__class__.__name__,
                 }, ensure_ascii=False))
                 continue
+            register_job(result.get("job_id"))
             await websocket.send_text(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
     except (WebSocketDisconnect, BrokenPipeError, ConnectionResetError, OSError):
         pass

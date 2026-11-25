@@ -70,6 +70,19 @@ SCHEMA_SQL = (
     """,
     "CREATE INDEX IF NOT EXISTS auth_jobs_user_idx ON auth_jobs (user_id)",
     """
+    CREATE TABLE IF NOT EXISTS auth_workspaces (
+        user_id BIGINT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+        workspace_id VARCHAR(64) NOT NULL,
+        label VARCHAR(160) NOT NULL DEFAULT '工作区',
+        snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+        job_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, workspace_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS auth_workspaces_updated_idx ON auth_workspaces (user_id, updated_at DESC)",
+    """
     CREATE TABLE IF NOT EXISTS auth_operation_logs (
         id BIGSERIAL PRIMARY KEY,
         user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
@@ -485,6 +498,106 @@ def delete_job(job_id: str) -> None:
     with connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute("DELETE FROM auth_jobs WHERE job_id = %s", (job_id,))
+
+
+def _serialize_workspace(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    value = dict(row)
+    for key in ("created_at", "updated_at"):
+        timestamp = value.get(key)
+        if isinstance(timestamp, datetime):
+            value[key] = timestamp.astimezone(timezone.utc).isoformat()
+    value["job_ids"] = value.get("job_ids") if isinstance(value.get("job_ids"), list) else []
+    value["snapshot"] = value.get("snapshot") if isinstance(value.get("snapshot"), dict) else {}
+    return value
+
+
+def list_workspaces(user_id: int) -> list[dict[str, Any]]:
+    with connection() as conn:
+        with conn.cursor(cursor_factory=_dict_cursor()) as cursor:
+            cursor.execute(
+                """
+                SELECT workspace_id, label, snapshot, job_ids, created_at, updated_at
+                FROM auth_workspaces
+                WHERE user_id = %s
+                ORDER BY updated_at DESC
+                """,
+                (int(user_id),),
+            )
+            rows = _rows(cursor)
+    return [_serialize_workspace(row) for row in rows]
+
+
+def get_workspace(user_id: int, workspace_id: str) -> dict[str, Any] | None:
+    with connection() as conn:
+        with conn.cursor(cursor_factory=_dict_cursor()) as cursor:
+            cursor.execute(
+                """
+                SELECT workspace_id, label, snapshot, job_ids, created_at, updated_at
+                FROM auth_workspaces
+                WHERE user_id = %s AND workspace_id = %s
+                """,
+                (int(user_id), workspace_id),
+            )
+            row = _row(cursor)
+    return _serialize_workspace(row)
+
+
+def upsert_workspace(
+    user_id: int,
+    workspace_id: str,
+    label: str,
+    snapshot: Mapping[str, Any],
+    job_ids: list[str],
+) -> dict[str, Any]:
+    try:
+        from psycopg2.extras import Json
+    except ImportError as exc:  # pragma: no cover - 由 requirements 保证
+        raise AuthDatabaseError("缺少 psycopg2 JSON 支持。") from exc
+    with connection() as conn:
+        with conn.cursor(cursor_factory=_dict_cursor()) as cursor:
+            cursor.execute(
+                """
+                INSERT INTO auth_workspaces (user_id, workspace_id, label, snapshot, job_ids)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (user_id, workspace_id) DO UPDATE
+                SET label = EXCLUDED.label,
+                    snapshot = EXCLUDED.snapshot,
+                    job_ids = EXCLUDED.job_ids,
+                    updated_at = NOW()
+                RETURNING workspace_id, label, snapshot, job_ids, created_at, updated_at
+                """,
+                (int(user_id), workspace_id, label, Json(dict(snapshot)), Json(list(job_ids))),
+            )
+            row = _row(cursor)
+    result = _serialize_workspace(row)
+    if result is None:
+        raise AuthDatabaseError("保存工作区失败。")
+    return result
+
+
+def delete_workspace(user_id: int, workspace_id: str) -> bool:
+    with connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM auth_workspaces WHERE user_id = %s AND workspace_id = %s",
+                (int(user_id), workspace_id),
+            )
+            return cursor.rowcount > 0
+
+
+def remove_job_from_workspaces(user_id: int, job_id: str) -> None:
+    with connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE auth_workspaces
+                SET job_ids = job_ids - %s, updated_at = NOW()
+                WHERE user_id = %s AND job_ids ? %s
+                """,
+                (job_id, int(user_id), job_id),
+            )
 
 
 def log_operation(

@@ -38,6 +38,10 @@ class ConfiguredOceanEnvironmentSource(AcousticEnvironmentSource):
             bottom_geo_config=get_bottom_geo_config(config),
         )
 
+    def prefetch_environment(self, data_access, source_grids):
+        """在获取 NetCDF 跨进程锁之前下载远程温盐子集。"""
+        data_access.prefetch_profile_data(source_grids)
+
     def prepare_shared_environment(self, data_access, topography, source_grids, settings):
         """一次性读取并整理全部声源共享的环境数据。"""
         return legacy_environment._prepare_shared_source_environment(

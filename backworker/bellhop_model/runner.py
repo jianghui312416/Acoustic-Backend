@@ -2430,6 +2430,26 @@ class _DataAccess:
             if path is not None and not os.path.isfile(path):
                 raise FileNotFoundError(f"{label} file does not exist: {path}")
 
+    def prefetch_profile_data(self, grids: Sequence[Mapping[str, Any]]) -> None:
+        """下载远程温盐子集，但不打开 NetCDF/HDF5 文件。"""
+        if not grids:
+            return
+        query_lon = np.concatenate([
+            np.asarray(grid["lon"], dtype=np.float64).ravel() for grid in grids
+        ])
+        query_lat = np.concatenate([
+            np.asarray(grid["lat"], dtype=np.float64).ravel() for grid in grids
+        ])
+        for kind in ("temperature", "salinity"):
+            if self._modes[kind] == "file":
+                continue
+            reader = self._readers[self._modes[kind]]
+            prefetch = getattr(reader, "prefetch_profile_cube", None)
+            if not callable(prefetch):
+                continue
+            tag = reader.temperature_tag if kind == "temperature" else reader.salinity_tag
+            prefetch(tag, query_lon, query_lat)
+
     def close(self) -> None:
         """关闭该任务创建的全部远程或数据库读取器。"""
         for reader in self._readers.values():

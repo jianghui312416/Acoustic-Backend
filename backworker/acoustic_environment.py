@@ -32,6 +32,11 @@ class AcousticEnvironmentSource(Protocol):
         settings: Mapping[str, Any],
     ) -> Sequence[Mapping[str, Any]]: ...
     def open_data_access(self, params: Mapping[str, Any], config: Mapping[str, Any]) -> Any: ...
+    def prefetch_environment(
+        self,
+        data_access: Any,
+        source_grids: Sequence[Mapping[str, Any]],
+    ) -> None: ...
     def prepare_shared_environment(
         self,
         data_access: Any,
@@ -513,28 +518,35 @@ def acquire(
     """一次性读取所有声源需要的共享环境数据。"""
     from .netcdf_access_lock import locked as netcdf_read_locked
 
-    # 所有模型统一从这里进入环境数据读取。锁由 dispatcher 父进程创建并注入
-    # 四个声场 worker，只保护 NetCDF/HDF5 打开和复制到内存的阶段。
-    with netcdf_read_locked():
-        topography_file = source.resolve_topography_file(params, config)
-        topography_path = Path(str(topography_file))
-        if not topography_path.is_file():
-            raise FileNotFoundError(f"地形文件不存在：{topography_file or '(空路径)'}")
+    topography_file = source.resolve_topography_file(params, config)
+    topography_path = Path(str(topography_file))
+    if not topography_path.is_file():
+        raise FileNotFoundError(f"地形文件不存在：{topography_file or '(空路径)'}")
 
-        topography = source.open_topography(topography_path)
-        source_grids = source.build_source_grids(points, params, settings)
-        data_access = source.open_data_access(params, config)
-        try:
-            data_access.validate()
+    # Grid construction and remote downloads do not touch the NetCDF/HDF5 C
+    # libraries.  Keep them outside the cross-process lock so an unavailable
+    # upstream service cannot stall every portal request.
+    source_grids = source.build_source_grids(points, params, settings)
+    data_access = source.open_data_access(params, config)
+    try:
+        data_access.validate()
+        prefetch = getattr(source, "prefetch_environment", None)
+        if callable(prefetch):
+            prefetch(data_access, source_grids)
+
+        # The shared lock now covers only local native-library access and the
+        # in-memory copy phase.
+        with netcdf_read_locked():
+            topography = source.open_topography(topography_path)
             shared_environment = source.prepare_shared_environment(
                 data_access,
                 topography,
                 source_grids,
                 settings,
             )
-        except Exception:
-            data_access.close()
-            raise
+    except Exception:
+        data_access.close()
+        raise
 
     return PreparedAcousticEnvironment(
         params=params,

@@ -8,3 +8,5 @@ __pycache__/
 bellhop.exe
 ram.exe
 tests/
+tests/*
+!tests/test_workspace_api.py

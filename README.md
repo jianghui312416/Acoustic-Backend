@@ -16,7 +16,7 @@ python -m venv .venv
 ## 用户认证
 
 - 认证配置统一放在 `config/data_config.json` 的 `AUTH` 段，不再使用 env 文件：
-  - `AUTH.database`：独立认证数据库，默认 `acoustic_auth`；首次启动自动创建数据库与 `auth_users`、`auth_tokens`、`auth_jobs`、`auth_operation_logs` 表。主机/端口/账号密码为空时继承 `DATA_SERVICES.api1`。
+  - `AUTH.database`：独立认证数据库，默认 `acoustic_auth`；首次启动自动创建数据库与 `auth_users`、`auth_tokens`、`auth_jobs`、`auth_workspaces`、`auth_operation_logs` 表。主机/端口/账号密码为空时继承 `DATA_SERVICES.api1`。
   - `AUTH.admin`：初始管理员只在用户表为空时创建，默认 `admin / admin123456`，请修改后重启并尽快登录改密。
   - `AUTH.token_ttl_hours`、`AUTH.registration_auto_approve`、`AUTH.max_concurrent_jobs`、`AUTH.job_queue_wait_seconds`：令牌有效期、是否自动审核、每用户并发数与排队上限。
 - 修改 `data_config.json` 后，运行时读取的认证参数会自动热加载；数据库连接参数改变后建议重启后端。
@@ -24,6 +24,7 @@ python -m venv .venv
 - 注册账号默认需要管理员在“用户审核”页面通过后才能登录。
 - 所有业务接口（含声场计算、文件下载、任务查询、WebSocket）都会在服务端校验 `Bearer` 令牌；Vue 路由守卫只是界面层限制，不能替代后端认证。
 - 任务、文件和历史记录按用户隔离；管理员可以查看全部用户与任务，并查看操作日志。
+- 工作区现场快照和其内部声场任务关系保存在 `auth_workspaces`，通过 `/workspaces` 接口按登录账号同步，换电脑登录后仍可恢复。
 
 ## 配置
 

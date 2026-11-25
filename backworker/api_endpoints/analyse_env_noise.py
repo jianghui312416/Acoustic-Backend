@@ -286,8 +286,15 @@ def handle(payload):
         )
         normalised = _normalise_request(request_payload, core)
         if normalised["mode"] == "manual_mixed":
-            response = build_response(normalised)
-            return _attach_time_frequency(response, request_payload, normalised, core), None
+            response = _attach_time_frequency(
+                build_response(normalised), request_payload, normalised, core
+            )
+            # 手动噪声不启动声学求解器，但仍登记任务目录，供工作区直接恢复结果。
+            job_id, _job_dir = core._save_result_job(
+                {"noise_request": request_payload, "noise_normalised": normalised},
+                PLUGIN_NAME,
+            )
+            return response, job_id
         response, job_id = _build_distributed_response(normalised, core)
         return _attach_time_frequency(response, request_payload, normalised, core), job_id
 

@@ -31,7 +31,7 @@ app = FastAPI(title="Bellhop Web Backend", version="backend-fastapi-v1", lifespa
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Bellhop-Explicit-Submit"],
 )
 # 海流接口包含全部深度层，JSON 体积明显大于二维天气网格；传输前压缩，
@@ -1909,6 +1909,28 @@ def _run_portal_job(params):
     return job_id, job_dir, result
 
 
+def _save_result_job(params, plugin_name):
+    """为不经过声学求解器的同步结果（如手动环境噪声）建立可恢复任务目录。
+
+    这类接口本身不产生声场网格，但工作区仍需要按任务号重新取回结果，
+    因此这里只登记参数与完成状态，结果 JSON 由 ``handle_portal_payload`` 写入。
+    """
+    job_id = uuid.uuid4().hex[:12]
+    job_dir = os.path.join(JOBS_DIR, job_id)
+    os.makedirs(job_dir, exist_ok=True)
+    stored = dict(params or {})
+    stored["job_id"] = job_id
+    stored["plugin"] = plugin_name
+    _write_json(os.path.join(job_dir, "params.json"), stored)
+    _write_json(os.path.join(job_dir, "job_status.json"), {
+        "status": "ready",
+        "progress": "完成",
+        "message": "结果已保存。",
+        "ready": True,
+    })
+    return job_id, job_dir
+
+
 def _run_portal_native_3d_ray_job(params, sector, line_count):
     """单独执行 AnalyseRayTracing 的 Bellhop3D 任务。
 
@@ -2954,7 +2976,13 @@ def _env_read_query_profiles(
     try:
         if source_mode == "file" and source_kind:
             source = database_source.data_source_config(CONFIG, source_kind)
-            path = database_source.data_source_file(CONFIG, source_kind, time_value)
+            # 海冰文件通常只覆盖逐小时的一段预报时次；请求时次缺失时取最近文件，
+            # 避免整次声场计算因冰厚查询时报而静默失败。
+            path = (
+                database_source.nearest_data_source_file(CONFIG, source_kind, time_value)
+                if data_type == "DT_ENV_ICE_THICKNESS"
+                else database_source.data_source_file(CONFIG, source_kind, time_value)
+            )
             variable_name = str(source.get("hycom_variable") or data_type).strip()
             if data_type == "DT_ENV_ICE_THICKNESS":
                 values = bellhop_runner._read_scalar_grid_field(
@@ -3187,6 +3215,13 @@ def _build_env_region_response(request_payload):
     invalid_locations = _env_invalid_location_mask(
         lon_grid, lat_grid, request_payload["dataSource"], request_payload["time"]
     )
+    if request_payload["dataType"] == "DT_ENV_ICE_THICKNESS":
+        # 与站点冰厚接口保持一致：有效水域里冰厚缺测（HYCOM 开阔水域填充值）
+        # 表示无冰，返回 0 m；只有陆地/缺测地形才保留门户缺测标记 9999。
+        open_water_missing = (~invalid_locations) & (
+            ~np.isfinite(grid) | (np.abs(grid - PORTAL_INVALID_DATA_VALUE) < 1e-6)
+        )
+        grid = np.where(open_water_missing, 0.0, grid)
     grid[invalid_locations] = np.nan
     return {
         "row": int(row),
@@ -3745,6 +3780,16 @@ def _require_job_access(request, job_id: str) -> dict:
     return user
 
 
+_WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _workspace_user(request: Request) -> dict:
+    user = _request_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="请先登录。")
+    return user
+
+
 def _owned_job_ids(user) -> set[str] | None:
     if _is_admin(user):
         return None
@@ -3833,6 +3878,55 @@ def _workspace_field_eligible(params):
     return (not portal.get("azimuth")) and sector > 1
 
 
+def _job_response_files(job_dir):
+    """返回任务目录内已落盘的门户结果文件 ``[(plugin, path), ...]``。"""
+    try:
+        names = sorted(os.listdir(job_dir))
+    except OSError:
+        return []
+    responses = []
+    for name in names:
+        if not (name.startswith("response_") and name.endswith(".json")):
+            continue
+        path = os.path.join(job_dir, name)
+        try:
+            if not os.path.isfile(path) or os.path.getsize(path) <= 0:
+                continue
+        except OSError:
+            continue
+        responses.append((name[len("response_"):-len(".json")], path))
+    return responses
+
+
+def _job_result_kind(job_dir):
+    """识别任务结果类型：3d / 2d / 2d_ray / 3d_ray / noise / signal。
+
+    返回值 ``(kind, plugin, result_path)``。工作区按 kind 分派恢复逻辑；
+    ``result_path`` 为可直接读取的 JSON 结果文件（三维旧任务可能为 None）。
+    """
+    signal_result = os.path.join(job_dir, "signal_transmission", "signal_transmission_result.json")
+    if os.path.isfile(signal_result) and os.path.getsize(signal_result) > 0:
+        return "signal", "SignalTransmission", signal_result
+    continuous_manifest = os.path.join(job_dir, "continuous", "manifest.json")
+    if os.path.isfile(continuous_manifest) and os.path.getsize(continuous_manifest) > 0:
+        return "signal_stream", "SignalTransmission", continuous_manifest
+    responses = _job_response_files(job_dir)
+    for token, kind in (
+        ("3dtl", "3d"),
+        ("2dtl", "2d"),
+        ("2drt", "2d_ray"),
+        ("noise", "noise"),
+        ("3drt", "3d_ray"),
+    ):
+        for plugin, path in responses:
+            if token in plugin.lower():
+                return kind, plugin, path
+    tl_path = os.path.join(job_dir, "tl3d_depth_theta_range.nc")
+    if os.path.isfile(tl_path) and os.path.getsize(tl_path) > 0:
+        return "3d", "Analyse3DTLRD", None
+    return "unknown", "", None
+
+
 def _workspace_job_summary(job_id, job_dir):
     """Return the small, stable subset needed by the GeoVis work drawer."""
     try:
@@ -3844,6 +3938,7 @@ def _workspace_job_summary(job_id, job_dir):
     except (OSError, ValueError, TypeError):
         job_status = {}
     portal = params.get("portal_request") or {}
+    kind, plugin, result_path = _job_result_kind(job_dir)
     tl_path = os.path.join(job_dir, "tl3d_depth_theta_range.nc")
     saved_tl_path = _saved_3d_tl_response_path(job_dir)
     openable = bool(saved_tl_path) or (
@@ -3852,15 +3947,19 @@ def _workspace_job_summary(job_id, job_dir):
     candidates = [job_dir, os.path.join(job_dir, "params.json"), os.path.join(job_dir, "job_status.json"), tl_path]
     if saved_tl_path:
         candidates.append(saved_tl_path)
+    if result_path:
+        candidates.append(result_path)
     modified = max((os.path.getmtime(path) for path in candidates if os.path.exists(path)), default=0.0)
     model = str(params.get("acoustic_model") or portal.get("acousticModel") or "bellhop")
     status_value = str(job_status.get("status") or ("completed" if openable else "unknown"))
     return {
         "job_id": job_id,
         "status": status_value,
-        "status_label": "完成" if openable else (job_status.get("progress") or "处理中"),
+        "status_label": "完成" if (openable or result_path) else (job_status.get("progress") or "处理中"),
         "openable": bool(openable),
         "workspace_eligible": _workspace_field_eligible(params),
+        "kind": kind,
+        "plugin": plugin,
         "model": model,
         "model_label": "Bellhop 三维声场" if "bellhop" in model.lower() else "三维声场",
         "frequency_hz": params.get("freq_hz", portal.get("calcFrequency")),
@@ -3937,11 +4036,74 @@ def workspace_job_visualization(job_id, request: Request):
         raise HTTPException(status_code=500, detail=f"读取工作声场失败：{exc}")
 
 
+@app.get("/jobs/{job_id}/restore")
+def restore_workspace_result(job_id, request: Request):
+    """按任务类型取回已保存的结果，供工作区恢复二维声场、噪声与信号链。"""
+    if not _safe_id(job_id):
+        raise HTTPException(status_code=404)
+    _require_job_access(request, job_id)
+    job_dir = os.path.join(JOBS_DIR, job_id)
+    if not os.path.isdir(job_dir):
+        raise HTTPException(status_code=404)
+    summary = _workspace_job_summary(job_id, job_dir)
+    kind, plugin, result_path = _job_result_kind(job_dir)
+    if kind in ("3d", "3d_ray"):
+        # 三维声场复用 visualization 的重新包装逻辑，保持旧前端行为不变。
+        return workspace_job_visualization(job_id, request)
+    if kind == "signal":
+        if not result_path:
+            raise HTTPException(status_code=404, detail="该任务没有可恢复的信号链结果。")
+        data = _read_json(result_path)
+        return _api_json_response({
+            "job": summary,
+            "kind": "signal",
+            "plugin": plugin,
+            "result": data,
+        })
+    if kind == "signal_stream":
+        manifest = _read_json(result_path) if result_path else {}
+        request_path = os.path.join(job_dir, "continuous", "request.json")
+        stream_request = {}
+        if os.path.isfile(request_path):
+            try:
+                stream_request = _read_json(request_path)
+            except (OSError, ValueError, TypeError):
+                stream_request = {}
+        return _api_json_response({
+            "job": summary,
+            "kind": "signal_stream",
+            "plugin": plugin,
+            "result": manifest,
+            "request": stream_request,
+        })
+    if kind == "unknown" or not result_path:
+        raise HTTPException(status_code=404, detail="该任务没有可恢复的结果。")
+    data = _read_json(result_path)
+    wrapped = _wrap_portal_response(
+        data,
+        {
+            "wrapped": True,
+            "technical_support": "XWOcean",
+            "sn": PORTAL_PLUGIN_SN_MAP.get(plugin, 16),
+            "task_id": job_id,
+            "self_order": 0,
+        },
+        plugin,
+        job_id=job_id,
+    )
+    return _api_json_response({
+        "job": summary,
+        "kind": kind,
+        "plugin": plugin,
+        "result": wrapped,
+    })
+
+
 @app.delete("/jobs/{job_id}")
 def delete_workspace_job(job_id, request: Request):
     if not _safe_id(job_id):
         raise HTTPException(status_code=404)
-    _require_job_access(request, job_id)
+    user = _require_job_access(request, job_id)
     job_dir = os.path.abspath(os.path.join(JOBS_DIR, job_id))
     jobs_root = os.path.abspath(JOBS_DIR)
     if os.path.commonpath([jobs_root, job_dir]) != jobs_root or not os.path.isdir(job_dir):
@@ -3958,9 +4120,78 @@ def delete_workspace_job(job_id, request: Request):
         raise HTTPException(status_code=500, detail=f"删除工作失败：{exc}")
     try:
         auth_database.delete_job(job_id)
+        auth_database.remove_job_from_workspaces(int(user["id"]), job_id)
     except Exception:
         pass
     return {"ok": True, "job_id": job_id}
+
+
+@app.get("/workspaces")
+def list_user_workspaces(request: Request):
+    user = _workspace_user(request)
+    try:
+        return {"workspaces": auth_database.list_workspaces(int(user["id"]))}
+    except auth_database.AuthDatabaseError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/workspaces/{workspace_id}")
+def get_user_workspace(workspace_id: str, request: Request):
+    if not _WORKSPACE_ID_RE.fullmatch(str(workspace_id or "")):
+        raise HTTPException(status_code=404)
+    user = _workspace_user(request)
+    try:
+        workspace = auth_database.get_workspace(int(user["id"]), workspace_id)
+    except auth_database.AuthDatabaseError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if workspace is None:
+        raise HTTPException(status_code=404)
+    return {"workspace": workspace}
+
+
+@app.put("/workspaces/{workspace_id}")
+def save_user_workspace(workspace_id: str, payload: Dict[str, Any], request: Request):
+    if not _WORKSPACE_ID_RE.fullmatch(str(workspace_id or "")):
+        raise HTTPException(status_code=400, detail="工作区 ID 无效。")
+    user = _workspace_user(request)
+    label = str(payload.get("label") or "工作区").strip()[:160] or "工作区"
+    snapshot = payload.get("snapshot")
+    if not isinstance(snapshot, dict):
+        raise HTTPException(status_code=400, detail="工作区快照格式无效。")
+    try:
+        snapshot_size = len(json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="工作区快照包含不可序列化内容。") from exc
+    if snapshot_size > 2_000_000:
+        raise HTTPException(status_code=413, detail="工作区快照不能超过 2 MB。")
+    raw_job_ids = payload.get("job_ids") or []
+    if not isinstance(raw_job_ids, list) or len(raw_job_ids) > 100:
+        raise HTTPException(status_code=400, detail="工作区声场列表格式无效。")
+    job_ids = list(dict.fromkeys(str(value or "").strip() for value in raw_job_ids if str(value or "").strip()))
+    for job_id in job_ids:
+        if not _safe_id(job_id) or not _job_access_allowed(user, job_id):
+            raise HTTPException(status_code=400, detail=f"声场任务 {job_id} 不存在或无权访问。")
+    try:
+        workspace = auth_database.upsert_workspace(
+            int(user["id"]), workspace_id, label, snapshot, job_ids
+        )
+    except auth_database.AuthDatabaseError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"workspace": workspace}
+
+
+@app.delete("/workspaces/{workspace_id}")
+def delete_user_workspace(workspace_id: str, request: Request):
+    if not _WORKSPACE_ID_RE.fullmatch(str(workspace_id or "")):
+        raise HTTPException(status_code=404)
+    user = _workspace_user(request)
+    try:
+        removed = auth_database.delete_workspace(int(user["id"]), workspace_id)
+    except auth_database.AuthDatabaseError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not removed:
+        raise HTTPException(status_code=404)
+    return {"ok": True, "workspace_id": workspace_id}
 
 
 @app.post("/abandon/{job_id}")
@@ -4417,6 +4648,7 @@ async def signal_transmission_websocket(websocket: WebSocket):
         websocket,
         jobs_dir=JOBS_DIR,
         core=sys.modules[__name__],
+        user_id=int(user["id"]),
     )
 
 
@@ -4714,7 +4946,10 @@ _FRONTEND_ROUTE_PATHS = {
     "/GetSeafloorFeatures",
     "/jobs",
     "/jobs/{job_id}/visualization",
+    "/jobs/{job_id}/restore",
     "/jobs/{job_id}",
+    "/workspaces",
+    "/workspaces/{workspace_id}",
     "/file/{job_id}/{filename:path}",
     "/array-channel/static",
     "/array-channel/communication",
